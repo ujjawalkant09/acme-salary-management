@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import func, select, update
+from sqlalchemy import bindparam, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core import cache
@@ -92,14 +92,24 @@ def store_rates(
 
 
 def refresh_usd_salaries(db: Session) -> None:
+    """Recompute every USD salary with the same rounding as `Rates.to_usd`. Written to the
+    table directly, so `updated_at` and `version` stay as the last real edit left them."""
     rates = rates_in_use(db)
-    for currency, rate in rates.usd_per_unit.items():
-        db.execute(
-            update(Employee)
-            .where(Employee.current_currency == currency)
-            .values(current_salary_usd=func.round(Employee.current_salary * rate, 2))
-            .execution_options(synchronize_session=False)
-        )
+    people = db.execute(select(Employee.id, Employee.current_salary, Employee.current_currency))
+    values = [
+        {"row_id": employee_id, "usd": rates.to_usd(amount, currency)}
+        for employee_id, amount, currency in people
+        if currency in rates.usd_per_unit
+    ]
+    if not values:
+        return
+    table = Employee.__table__
+    db.execute(
+        update(table)
+        .where(table.c.id == bindparam("row_id"))
+        .values(current_salary_usd=bindparam("usd"), updated_at=table.c.updated_at),
+        values,
+    )
 
 
 def refresh_daily_rates(db: Session, client: httpx.Client) -> bool:

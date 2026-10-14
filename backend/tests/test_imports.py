@@ -1,11 +1,13 @@
 import csv
 import io
 import uuid
+from datetime import timedelta
 
 import pytest
 from openpyxl import Workbook, load_workbook
 from sqlalchemy.dialects import postgresql
 
+from app.core.clock import as_utc
 from app.models import Employee, ImportJob, SalaryRecord
 from app.services import imports as service
 from app.services.import_file import COLUMNS, template_xlsx
@@ -103,6 +105,28 @@ def test_existing_employee_rows(ctx, make_employee):
     assert payload["salary"]["effective_date"] == "2026-10-14"  # default: today
     assert payload["salary"]["reason"] == "other"
     assert payload["version"] == e.version
+
+
+def test_blank_currency_keeps_the_employees_currency(ctx, make_employee):
+    # Paid in USD while living in India: a blank currency cell must not mean INR.
+    e = make_employee(country_code="IN", salary="100000", currency="USD", email="asha@acme.example",
+                      first_name="Asha", last_name="Verma", city="Pune", hire_date="2025-04-01")  # fmt: skip
+    same = row(employee_code=e.employee_code, salary="100000")
+    assert service.check_row(same, ctx())[0] == "unchanged"
+    action, payload, _ = service.check_row({**same, "salary": "110000"}, ctx())
+    assert action == "update"
+    assert payload["salary"]["currency"] == "USD"
+
+
+def test_someone_not_started_yet_can_be_reimported(ctx, make_employee):
+    e = make_employee(country_code="IN", salary="1840000", email="asha@acme.example",
+                      first_name="Asha", last_name="Verma", city="Pune", hire_date="2026-11-01")  # fmt: skip
+    same = row(employee_code=e.employee_code, hire_date="2026-11-01")
+    assert service.check_row(same, ctx()) == ("unchanged", {"raw": same}, [])
+    # A new salary without a date starts on their first day, not today.
+    action, payload, _ = service.check_row({**same, "salary": "1900000"}, ctx())
+    assert action == "update"
+    assert payload["salary"]["effective_date"] == "2026-11-01"
 
 
 def test_email_owned_by_someone_else(ctx, make_employee):
@@ -258,10 +282,55 @@ def test_employee_changed_after_check_stops_all_or_nothing(
     run_worker(session_factory, storage)
 
     job = admin_client.get(f"{API}/{job_id}").json()
-    assert job["status"] == "failed" and "changed after the check" in job["error_message"]
+    assert (
+        job["status"] == "failed" and "The employee changed after the check" in job["error_message"]
+    )
     db.expire_all()
     assert db.query(Employee).count() == 1  # the new row was rolled back too
     assert db.get(Employee, e.id).current_salary == 1000000
+
+
+def test_code_or_email_taken_after_the_check(
+    admin_client, make_employee, session_factory, storage, db
+):
+    data = csv_file(
+        row(employee_code="ACM-000001"),
+        row(employee_code="ACM-100002", email="b@acme.example"),
+        row(employee_code="ACM-100003", email="c@acme.example"),
+    )
+    job_id = start(admin_client, data).json()["id"]
+    run_worker(session_factory, storage)
+    assert admin_client.get(f"{API}/{job_id}").json()["create_count"] == 3
+    # While the import waits for review, the UI adds ACM-000001 and someone with b@.
+    make_employee()
+    make_employee(email="b@acme.example")
+
+    admin_client.post(f"{API}/{job_id}/commit", json={"mode": "valid_rows_only"})
+    run_worker(session_factory, storage)
+    job = admin_client.get(f"{API}/{job_id}").json()
+    assert (job["status"], job["created_count"], job["error_count"]) == ("completed", 1, 2)
+    errors = admin_client.get(f"{API}/{job_id}/rows", params={"action": "error"}).json()
+    assert [(r["row_number"], r["errors"][0]["field"]) for r in errors["items"]] == [
+        (2, "employee_code"),
+        (3, "email"),
+    ]
+    db.expire_all()
+    assert db.query(Employee).filter_by(employee_code="ACM-100003").count() == 1
+
+
+def test_code_taken_after_the_check_stops_all_or_nothing(
+    admin_client, make_employee, session_factory, storage, db
+):
+    job_id = start(admin_client, csv_file(row(employee_code="ACM-000001"))).json()["id"]
+    run_worker(session_factory, storage)
+    make_employee()
+    admin_client.post(f"{API}/{job_id}/commit", json={"mode": "all_or_nothing"})
+    run_worker(session_factory, storage)
+    job = admin_client.get(f"{API}/{job_id}").json()
+    assert job["status"] == "failed"
+    assert job["error_message"].startswith("Row 2, employee_code: Taken by an employee")
+    db.expire_all()
+    assert db.query(Employee).count() == 1
 
 
 def test_failure_in_the_middle_of_apply_saves_nothing(
@@ -279,7 +348,7 @@ def test_failure_in_the_middle_of_apply_saves_nothing(
         calls.append(1)
         if len(calls) == 2:
             raise RuntimeError("disk full")
-        real_create(*args)
+        return real_create(*args)
 
     monkeypatch.setattr(service, "_create_from_row", create_then_fail)
     run_worker(session_factory, storage)
@@ -302,6 +371,7 @@ def test_bad_files_fail_with_a_clear_message(
     run_worker(session_factory, storage)
     job = admin_client.get(f"{API}/{job_id}").json()
     assert job["status"] == "failed" and message in job["error_message"]
+    assert not (storage.root / "imports" / job_id).exists()  # a failed job's file is not kept
 
 
 def test_row_limit(admin_client, session_factory, storage, monkeypatch):
@@ -337,14 +407,30 @@ def test_xlsx_files_are_read(admin_client, session_factory, storage):
     assert admin_client.get(f"{API}/{job_id}").json()["create_count"] == 1
 
 
-def test_interrupted_jobs_are_requeued(db, admin):
+def test_interrupted_jobs_are_requeued(db, admin, frozen_clock):
+    quiet = frozen_clock.current - timedelta(minutes=16)
     db.add_all([
-        ImportJob(id="a", filename="a.csv", file_sha256="1", status="validating", created_by=admin.id),
+        ImportJob(id="a", filename="a.csv", file_sha256="1", status="validating", created_by=admin.id,
+                  heartbeat_at=quiet),
         ImportJob(id="b", filename="b.csv", file_sha256="2", status="committing", created_by=admin.id),
+        # Another worker is still on this one.
+        ImportJob(id="c", filename="c.csv", file_sha256="3", status="committing", created_by=admin.id,
+                  heartbeat_at=frozen_clock.current - timedelta(minutes=1)),
     ])  # fmt: skip
     db.commit()
     service.reset_stuck_jobs(db)
-    assert [db.get(ImportJob, i).status for i in ("a", "b")] == ["queued", "commit_queued"]
+    service.reset_stuck_jobs(db)  # safe to re-run
+    statuses = [db.get(ImportJob, i).status for i in ("a", "b", "c")]
+    assert statuses == ["queued", "commit_queued", "committing"]
+
+
+def test_claiming_and_checking_keep_the_heartbeat_fresh(
+    admin_client, session_factory, storage, db, frozen_clock
+):
+    job_id = start(admin_client, csv_file(row())).json()["id"]
+    run_worker(session_factory, storage)
+    db.expire_all()
+    assert as_utc(db.get(ImportJob, job_id).heartbeat_at) == frozen_clock.current
 
 
 def test_viewers_cannot_import_but_can_see_history(viewer_client, admin_client):

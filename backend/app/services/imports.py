@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core import cache
@@ -44,6 +44,8 @@ log = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = ("queued", "validating", "validated", "commit_queued", "committing")
 CHUNK = 500
+# Longer than any single step without a heartbeat (applying the largest file allowed).
+STUCK_AFTER = timedelta(minutes=15)
 UPDATE_REASONS = ("promotion", "merit", "market_adjustment", "correction", "other")
 # Detail fields an import can change on an existing employee.
 DETAIL_FIELDS = (
@@ -277,6 +279,7 @@ def check_row(raw: dict[str, str], ctx: Context) -> tuple[str, dict, list[dict]]
     or error."""
     row = _Row(raw)
     code = (row.text("employee_code", max_length=20) or "").upper()
+    existing = ctx.existing.get(code) if code else None
     values: dict = {
         "first_name": row.text("first_name"),
         "last_name": row.text("last_name"),
@@ -325,9 +328,10 @@ def check_row(raw: dict[str, str], ctx: Context) -> tuple[str, dict, list[dict]]
     if salary is not None and (salary <= 0 or salary >= Decimal("1e12")):
         row.error("salary", "Must be more than 0 and less than 1,000,000,000,000")
         salary = None
-    currency = (row.text("currency", required=False) or "").upper() or (
-        ctx.countries.get(country) if country else None
-    )
+    currency = (row.text("currency", required=False) or "").upper()
+    if not currency:
+        # Blank: an existing employee keeps their currency; a new one gets the country's.
+        currency = existing.current_currency if existing else ctx.countries.get(country)
     if currency and currency not in ctx.currencies:
         row.error("currency", "Not a supported currency")
         currency = None
@@ -345,12 +349,13 @@ def check_row(raw: dict[str, str], ctx: Context) -> tuple[str, dict, list[dict]]
             row.error("email", "Appears more than once in the file")
         ctx.seen_emails.add(email)
 
-    existing = ctx.existing.get(code) if code else None
     if email and ctx.email_owner.get(email, code) != code:
         row.error("email", "Already used by another employee")
 
     hire_date = values["hire_date"]
-    effective = effective or (hire_date if existing is None else today())
+    # Default: the hire date for new people; for others today, or the start date of
+    # someone who hasn't started yet.
+    effective = effective or (hire_date if existing is None else max(today(), hire_date or today()))
     if effective and hire_date and effective < hire_date:
         row.error("salary_effective_date", "Before the hire date")
     if effective and effective > today() + MAX_FUTURE:
@@ -446,6 +451,7 @@ def validate_job(db: Session, storage: LocalStorage, job: ImportJob) -> None:
                 )
             )
         job.processed_rows = min(start + CHUNK, len(rows))
+        job.heartbeat_at = now()
         db.commit()
 
     job.create_count, job.update_count = counts["create"], counts["update"]
@@ -462,10 +468,12 @@ class StaleRows(Exception):
 
 
 def apply_job(db: Session, job: ImportJob) -> None:
-    """Apply every create/update row in ONE transaction. With `valid_rows_only`, rows whose
-    employee changed after the check are marked as problems and skipped; with
-    `all_or_nothing` they stop the whole import."""
+    """Apply every create/update row in ONE transaction. Rows that no longer fit (the
+    employee changed, or a code or email was taken after the check) stop the whole import
+    with `all_or_nothing`; with `valid_rows_only` they are marked as problems and skipped."""
     rates = fx.rates_in_use(db)
+    codes = set(db.scalars(select(Employee.employee_code)))
+    email_owner = dict(db.execute(select(Employee.email, Employee.id)).all())
     rows = list(
         db.scalars(
             select(ImportRow)
@@ -476,29 +484,55 @@ def apply_job(db: Session, job: ImportJob) -> None:
     created = updated = 0
     for row in rows:
         payload = row.payload
-        if row.action == "create":
-            _create_from_row(db, job, payload, rates)
-            created += 1
-            continue
-        employee = db.get(Employee, payload["employee_id"])
-        if employee is None or employee.version != payload["version"]:
+        employee = db.get(Employee, payload["employee_id"]) if row.action == "update" else None
+        problem = _changed_since_check(row, payload, employee, codes, email_owner)
+        if problem:
+            column, message = problem
             if job.mode == "all_or_nothing":
                 raise StaleRows(
-                    f"Row {row.row_number}: the employee changed after the check. "
-                    "Upload the file again."
+                    f"Row {row.row_number}, {column}: {message}. Upload the file again."
                 )
             row.action = "error"
-            row.errors = [{"field": "employee_code", "message": "Changed after the check"}]
+            row.errors = [{"field": column, "message": message}]
             job.error_count += 1
             continue
-        _update_from_row(db, job, employee, payload, rates)
-        updated += 1
+        if employee is None:
+            employee = _create_from_row(db, job, payload, rates)
+            codes.add(employee.employee_code)
+            created += 1
+        else:
+            email_owner.pop(employee.email)
+            _update_from_row(db, job, employee, payload, rates)
+            updated += 1
+        email_owner[employee.email] = employee.id
 
     job.created_count, job.updated_count = created, updated
     job.status = "completed"
     job.finished_at = now()
     cache.bump_data_version(db)
     db.commit()
+
+
+def _changed_since_check(
+    row: ImportRow,
+    payload: dict,
+    employee: Employee | None,
+    codes: set[str],
+    email_owner: dict[str, int],
+) -> tuple[str, str] | None:
+    """The (column, message) of what changed in the database since the row was checked."""
+    email = payload["values"].get("email")
+    if row.action == "create":
+        if payload["employee_code"] in codes:
+            return "employee_code", "Taken by an employee added after the check"
+        if email in email_owner:
+            return "email", "Taken by an employee added after the check"
+        return None
+    if employee is None or employee.version != payload["version"]:
+        return "employee_code", "The employee changed after the check"
+    if email and email_owner.get(email, employee.id) != employee.id:
+        return "email", "Taken by another employee after the check"
+    return None
 
 
 def _salary_record(job: ImportJob, employee_id: int, salary: dict) -> SalaryRecord:
@@ -523,7 +557,7 @@ def _typed(values: dict) -> dict:
     return typed
 
 
-def _create_from_row(db: Session, job: ImportJob, payload: dict, rates: fx.Rates) -> None:
+def _create_from_row(db: Session, job: ImportJob, payload: dict, rates: fx.Rates) -> Employee:
     salary = payload["salary"]
     amount = Decimal(salary["amount"])
     employee = Employee(
@@ -538,6 +572,7 @@ def _create_from_row(db: Session, job: ImportJob, payload: dict, rates: fx.Rates
     db.add(employee)
     db.flush()
     db.add(_salary_record(job, employee.id, salary))
+    return employee
 
 
 def _update_from_row(
@@ -574,6 +609,7 @@ def claim_next_job(db: Session) -> ImportJob | None:
         return None
     job.status = "validating" if job.status == "queued" else "committing"
     job.started_at = job.started_at or now()
+    job.heartbeat_at = now()
     db.commit()
     return job
 
@@ -588,26 +624,32 @@ def run_job(db: Session, storage: LocalStorage, job: ImportJob) -> None:
     try:
         step()
     except (InvalidInput, StaleRows) as exc:
-        _fail(db, job_id, str(exc))
+        _fail(db, storage, job_id, str(exc))
     except Exception:
         log.exception("import job failed", extra={"fields": {"job_id": job_id}})
-        _fail(db, job_id, "Something went wrong while processing the file. Try again.")
+        _fail(db, storage, job_id, "Something went wrong while processing the file. Try again.")
 
 
-def _fail(db: Session, job_id: str, message: str) -> None:
+def _fail(db: Session, storage: LocalStorage, job_id: str, message: str) -> None:
     db.rollback()
     job = db.get(ImportJob, job_id)
     job.status = "failed"
     job.error_message = message
     job.finished_at = now()
     db.commit()
+    # A failed job is never retried (a new upload starts a new job), so drop its file.
+    storage.delete(_file_key(job_id))
 
 
 def reset_stuck_jobs(db: Session) -> None:
-    """After a restart: checking starts over, and an apply that was interrupted never
-    committed (it is one transaction), so it is queued again."""
+    """Queue again the jobs whose worker went quiet (it stopped or crashed): checking
+    starts over, and an interrupted apply never committed (it is one transaction). Jobs
+    a live worker is still on have a recent heartbeat and are left alone."""
     for job in db.scalars(
-        select(ImportJob).where(ImportJob.status.in_(("validating", "committing")))
+        select(ImportJob).where(
+            ImportJob.status.in_(("validating", "committing")),
+            or_(ImportJob.heartbeat_at.is_(None), ImportJob.heartbeat_at < now() - STUCK_AFTER),
+        )
     ):
         job.status = "queued" if job.status == "validating" else "commit_queued"
     db.commit()

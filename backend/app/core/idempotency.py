@@ -2,12 +2,15 @@
 
 The key row is added to the session *before* the work runs, so it is committed in the
 same transaction as the work: either both are saved or neither is. The response is then
-stored on the key. A repeat with the same key and body gets the stored response; the same
-key with a different body gets 409.
+stored on the key in a second commit. A repeat with the same key and body gets the stored
+response; the same key with a different body gets 409. If the second commit is lost, a
+retry gets 409 "already processed" instead of the stored response: the work still never
+runs twice.
 """
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Annotated, Any
@@ -17,12 +20,14 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import delete
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.clock import as_utc, now
 from app.core.errors import Conflict, InvalidInput
 from app.models import IdempotencyKey, User
+
+log = logging.getLogger(__name__)
 
 KEY_LIFETIME = timedelta(hours=24)
 
@@ -82,7 +87,16 @@ def run(
 
     record.status_code = status_code
     record.response_body = result
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        # The work is already saved; only the stored copy of the response is lost. The
+        # caller still gets the real result, and a retry gets 409 "already processed"
+        # (never a second change).
+        db.rollback()
+        log.warning(
+            "could not store the idempotent response", extra={"fields": {"endpoint": endpoint}}
+        )
     return JSONResponse(result, status_code=status_code)
 
 

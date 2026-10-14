@@ -3,7 +3,10 @@ import io
 import uuid
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
+from app.core import idempotency
+from app.core.errors import Conflict
 from app.models import Employee, SalaryRecord
 
 API = "/api/v1/employees"
@@ -181,6 +184,34 @@ def test_same_key_with_different_body_is_rejected(admin_client):
     response = admin_client.post(API, json=changed, headers={"Idempotency-Key": key})
     assert response.status_code == 409
     assert response.json()["error"]["details"]["reason"] == "idempotency_key_reused"
+
+
+def test_lost_stored_response_never_repeats_the_work(db, admin, monkeypatch):
+    calls = []
+
+    def work():
+        calls.append(1)
+        db.commit()  # the service's own commit saves the work and the key together
+        return {"ok": True}
+
+    real_commit = db.commit
+    commits = []
+
+    def lose_the_second_commit():
+        commits.append(1)
+        if len(commits) == 2:  # the one that stores the response
+            raise OperationalError("COMMIT", {}, Exception("connection lost"))
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", lose_the_second_commit)
+    response = idempotency.run(db, admin, "k1", "test", {"a": 1}, work, status_code=201)
+    assert (response.status_code, response.body) == (201, b'{"ok":true}')
+
+    monkeypatch.setattr(db, "commit", real_commit)
+    with pytest.raises(Conflict) as retry:
+        idempotency.run(db, admin, "k1", "test", {"a": 1}, work, status_code=201)
+    assert retry.value.details["reason"] == "idempotency_in_progress"
+    assert calls == [1]
 
 
 def test_failed_create_does_not_burn_the_key(admin_client, db):

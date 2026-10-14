@@ -29,7 +29,7 @@ HELP = {
     "hire_date": "Required. YYYY-MM-DD",
     "gender": "Optional. female, male, non_binary or undisclosed",
     "salary": "Required. Yearly base salary, e.g. 1840000",
-    "currency": "Optional. Defaults to the country's currency",
+    "currency": "Optional. Default: the employee's current one (new people: the country's)",
     "salary_effective_date": "Optional. YYYY-MM-DD; when a salary changes (default: today)",
     "salary_reason": "Optional. promotion, merit, market_adjustment, correction or other",
 }

@@ -59,6 +59,7 @@ def purge_removed_documents(db: Session, storage: LocalStorage) -> int:
 
 def run_daily_tasks(db: Session, storage: LocalStorage, client: httpx.Client) -> None:
     """Every task is safe to run again: each one checks what is still to do."""
+    imports.reset_stuck_jobs(db)
     promoted = employees.promote_due_salaries(db)
     if promoted:
         log.info("future salaries took effect", extra={"fields": {"employees": promoted}})

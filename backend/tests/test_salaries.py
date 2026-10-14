@@ -87,6 +87,32 @@ def test_same_day_correction_replaces_current(admin_client, make_employee):
     assert body["current_salary"] == "111000.00"
 
 
+def test_same_day_correction_before_the_start_date(admin_client, make_employee, db, frozen_clock):
+    e = make_employee(salary="80000", hire_date="2026-11-01")
+    body = change(
+        admin_client, e.id, amount="85000", effective_date="2026-11-01", reason="correction"
+    ).json()
+    assert (body["current_salary"], body["upcoming_salary"]) == ("85000.00", None)
+
+    frozen_clock.set(datetime(2026, 11, 2, 1, tzinfo=UTC))
+    db.expire_all()
+    service.promote_due_salaries(db)
+    db.refresh(e)
+    assert e.current_salary == 85000
+
+
+def test_earlier_start_salary_before_the_start_date(admin_client, make_employee):
+    e = make_employee(salary="80000", hire_date="2026-10-20")
+    change(admin_client, e.id, amount="82000", effective_date="2026-12-01")
+    body = change(
+        admin_client, e.id, version=2, amount="81000", effective_date="2026-10-20",
+        reason="correction",
+    ).json()  # fmt: skip
+    # The first day's salary is current; the December raise is still upcoming.
+    assert body["current_salary"] == "81000.00"
+    assert body["upcoming_salary"]["amount"] == "82000.00"
+
+
 def test_salary_in_another_currency_is_converted(admin_client, make_employee):
     e = make_employee(country_code="IN", salary="1000000")
     body = change(admin_client, e.id, amount="20000", currency="USD").json()

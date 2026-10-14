@@ -112,3 +112,22 @@ def test_no_employee_usd_drift_after_refresh(db, make_employee):
     for e in db.query(Employee):
         db.refresh(e)
         assert e.current_salary_usd == rates.to_usd(e.current_salary, e.current_currency)
+
+
+def test_refresh_leaves_who_and_when_alone(db, make_employee, frozen_clock):
+    e = make_employee(country_code="IN", salary="2500000")
+    edited_at, version = e.updated_at, e.version
+    frozen_clock.set(datetime(2026, 10, 20, 17, tzinfo=UTC))
+    fx.refresh_daily_rates(db, fake_client(ecb_response()))
+    db.refresh(e)
+    assert e.current_salary_usd == Decimal("31250.00")
+    assert (e.updated_at, e.version) == (edited_at, version)
+
+
+def test_refresh_rounds_half_cents_like_the_app(db, make_employee):
+    e = make_employee(country_code="IN", salary="100.04")
+    fx.store_rates(db, date(2026, 10, 15), {"INR": Decimal("0.125")}, "test")
+    db.commit()
+    db.refresh(e)
+    assert e.current_salary_usd == Decimal("12.50")  # 12.505, half to even
+    assert e.current_salary_usd == fx.rates_in_use(db).to_usd(e.current_salary, "INR")

@@ -175,7 +175,9 @@ def make_employee(db, admin):
 
     def make(**overrides):
         n = next(counter)
-        salary = overrides.pop("salary", "100000")
+        salary = {"amount": overrides.pop("salary", "100000")}
+        if "currency" in overrides:
+            salary["currency"] = overrides.pop("currency")
         data = {
             "first_name": f"First{n}",
             "last_name": f"Last{n}",
@@ -186,7 +188,7 @@ def make_employee(db, admin):
             "country_code": "US",
             "employment_type": "full_time",
             "hire_date": "2022-01-10",
-            "salary": {"amount": salary},
+            "salary": salary,
         }
         data.update(overrides)
         out = employee_service.create(db, admin, EmployeeCreate.model_validate(data))

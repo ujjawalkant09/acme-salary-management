@@ -267,10 +267,11 @@ def apply_salary_record(employee: Employee, record: SalaryRecord, rates: fx.Rate
 
     Same rule as `sync_current_salary`, without a query (used for bulk imports).
     """
-    starts_later = employee.salary_effective_date > today()  # hasn't started yet
-    if record.effective_date <= today() and (
-        record.effective_date >= employee.salary_effective_date or starts_later
-    ):
+    if employee.salary_effective_date <= today():
+        takes_over = employee.salary_effective_date <= record.effective_date <= today()
+    else:  # hasn't started yet: the earliest entry is current, the newest one on a tie
+        takes_over = record.effective_date <= employee.salary_effective_date
+    if takes_over:
         employee.current_salary = record.amount
         employee.current_currency = record.currency
         employee.current_salary_usd = rates.to_usd(record.amount, record.currency)
