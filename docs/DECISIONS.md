@@ -101,3 +101,25 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Small commits, one per step; no AI attribution lines in commit messages; `.claude/skills/` git-ignored and not pushed until the author decides; `.claude/CLAUDE.md` (the AI working rules) committed | Reviewable history; the AI instructions are visible to reviewers |
 | Word files (`*.docx`, including the assessment brief) are git-ignored and never pushed | The brief belongs to the hiring team; the repo is public |
 | Demo video 3–5 minutes from a written script | |
+
+## Implementation (backend and frontend, 14 Oct 2026)
+| Decision | Why |
+|---|---|
+| **Services own the transaction**: each write service ends with one `commit()`; the request's session rolls back anything left over | One place where a change is saved; easy to see that a salary change, leave, create or import apply is all-or-nothing |
+| **Idempotency key saved in the same transaction as the work**: the key row is added before the work runs and committed with it, then the response is stored on it. A retry of an unfinished request gets `409`, never a second change | No window where the work is saved but the key isn't (or the reverse) |
+| Salary changes also send the employee's `version`; every salary change (even a future-dated one) gives a new version | A raise based on a stale screen is refused instead of silently stacking |
+| Current salary = the latest entry in effect (ties: the newest entry); a backdated entry older than the current one only changes history; a daily task promotes future entries | One clear rule; same-day corrections replace the current amount |
+| Salary start dates: not before the hire date and at most one year ahead | Catches typos without blocking planned raises |
+| Marking someone as left takes effect immediately, whatever leaving date is entered | Simple; the date is recorded for history |
+| Emails are stored lower-cased with a plain unique index (instead of an index on `lower(email)`) | Same effect, works the same on SQLite and Postgres |
+| "Unusual" = outside 1.5 × IQR of the same role, level, country and currency, full-time equivalent; groups under 4 people are never flagged; the employee page shows the peer band from 2 people | Standard, explainable rule; tiny groups give noise |
+| Filter counts leave out the filter's own selection (choosing India still shows how many are in the US) | Users see what each option would add |
+| Import: blank optional cells (city, gender) leave stored values alone; departments must already exist; a changed salary without a date starts today (new people: the hire date); people who left can't get salary changes by import; the row limit is checked by the worker, not during upload | Safe defaults; nothing is cleared or created by accident |
+| An import waiting for review also blocks a new one (cancel it first) | "One import at a time" with no half-reviewed jobs left behind |
+| The CSV export uses the import's column names, so an exported file can be edited and imported back | Excel stays a two-way exit path |
+| Export is built in memory instead of streamed | 10,000 rows are ~2 MB and take 0.16 s; streaming with a request-scoped database session is fragile |
+| Local file downloads go through signed links to the app (15 minutes); S3 signed links replace them with the AWS deployment | Same short-lived-link behaviour in development and production |
+| Sessions use Starlette's signed-cookie `SessionMiddleware` | No session table; the app stays stateless |
+| The worker fetches exchange rates after 16:00 UTC, once a day | The ECB publishes around 16:00 CET |
+| Tests hash passwords with bcrypt cost 4 (the app uses the default, 12) | The full backend suite runs in ~4 s |
+| Frontend: shadcn/ui components written into `src/components/ui` by hand, `oxlint` for linting, newest package majors (React 19, React Router 8, TanStack Table 9, Vite 8) | No interactive CLI step; fast lint; current APIs |
