@@ -9,7 +9,7 @@ Web app for an HR Manager to manage and analyze salaries for 10,000 employees ac
 - AI usage log: [docs/AI_USAGE.md](docs/AI_USAGE.md)
 
 ## Run it locally
-Needs Python 3.12 with [uv](https://docs.astral.sh/uv/), and Node 26 with npm. Docker and Postgres come with the deployment step; locally the app runs on SQLite.
+Needs Python 3.12 with [uv](https://docs.astral.sh/uv/), and Node 26 with npm. Locally the app runs on SQLite; the production image (`Dockerfile`) runs on Postgres.
 
 **Backend** (API on http://localhost:8000, docs at `/api/v1/docs`)
 ```bash
@@ -31,6 +31,14 @@ npm run dev
 `npm run build` writes `frontend/dist`; the backend then serves the UI itself on http://localhost:8000.
 
 **Demo logins** (created by the seed): `priya.sharma@acme.example` (HR Admin) and `arjun.mehta@acme.example` (HR Viewer), with the passwords you set in `backend/.env`.
+
+## Deploy to AWS
+One command builds the image and deploys everything (one EC2 server, Postgres, HTTPS) to https://acme.docrelay.in. The demo server is off when unused to save money. Setup, commands and costs: [.claude/skills/aws-deploy/SKILL.md](.claude/skills/aws-deploy/SKILL.md).
+```bash
+.claude/skills/aws-deploy/scripts/deploy.sh          # create or update everything, release the current commit
+.claude/skills/aws-deploy/scripts/server.sh start    # turn the demo on (stops itself after 4 hours)
+.claude/skills/aws-deploy/scripts/server.sh stop     # back up, then turn it off
+```
 
 ## Checks
 ```bash
