@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Shows the two demo passwords. Only in your own terminal: it refuses when its output
-# is captured (by Claude, a pipe or a file), so the passwords never leave your screen.
 
 # shellcheck source=lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
