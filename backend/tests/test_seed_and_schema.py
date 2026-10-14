@@ -75,6 +75,17 @@ def test_seed_refuses_to_run_twice_without_reset(session_factory):
         assert db.scalar(select(func.count()).select_from(Employee)) == 10
 
 
+def test_seed_if_empty_leaves_existing_data_alone(session_factory):
+    with session_factory() as db:
+        seed_script._reset(db)
+        assert seed_script.seed(db, 10, AS_OF, if_empty=True) is True
+        first_name = db.get(Employee, 1).first_name
+        assert seed_script.seed(db, 20, AS_OF, if_empty=True) is False
+        assert db.scalar(select(func.count()).select_from(Employee)) == 10
+        assert db.scalar(select(func.count()).select_from(User)) == 2
+        assert db.get(Employee, 1).first_name == first_name
+
+
 def test_models_match_the_migration(template_db):
     """Fails if a model changed without a new Alembic migration."""
     config = Config(str(BACKEND / "alembic.ini"))

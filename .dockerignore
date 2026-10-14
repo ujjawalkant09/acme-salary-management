@@ -1,0 +1,13 @@
+# Only backend/ and frontend/ sources go into the image.
+*
+!backend/pyproject.toml
+!backend/uv.lock
+!backend/alembic.ini
+!backend/alembic
+!backend/app
+!backend/scripts
+!frontend
+frontend/node_modules
+frontend/dist
+**/__pycache__
+**/.env

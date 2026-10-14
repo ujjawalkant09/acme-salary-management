@@ -2,6 +2,7 @@
 
     uv run python -m scripts.seed            # refuses if employees already exist
     uv run python -m scripts.seed --reset    # wipes employees, history, files rows first
+    uv run python -m scripts.seed --if-empty # seeds only a fresh database (used on every deploy)
 
 The same seed and date always give the same people and salaries. Exchange rates come from a
 fixed snapshot so the seed never needs the network; the worker refreshes them daily.
@@ -228,11 +229,15 @@ def _batched(rows: list[dict]):
         yield rows[start : start + BATCH]
 
 
-def seed(db: Session, count: int, as_of: date, reset: bool = False) -> None:
+def seed(db: Session, count: int, as_of: date, reset: bool = False,
+         if_empty: bool = False) -> bool:  # fmt: skip
+    """Returns False when `if_empty` is set and the database already has employees."""
     settings = get_settings()
     if reset:
         _reset(db)
     elif db.scalar(select(func.count()).select_from(Employee)):
+        if if_empty:
+            return False
         raise SystemExit("Employees already exist. Use --reset to replace them.")
 
     for currency, rate in FX_SNAPSHOT.items():
@@ -268,17 +273,23 @@ def seed(db: Session, count: int, as_of: date, reset: bool = False) -> None:
                         "(SELECT max(id) FROM employees))"))  # fmt: skip
     cache.bump_data_version(db)
     db.commit()
+    return True
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=10_000)
-    parser.add_argument("--reset", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--reset", action="store_true")
+    mode.add_argument("--if-empty", action="store_true")
     args = parser.parse_args()
     started = timer.perf_counter()
     with SessionLocal() as db:
-        seed(db, args.count, today(), args.reset)
-    print(f"Seeded {args.count:,} employees in {timer.perf_counter() - started:.1f}s")
+        seeded = seed(db, args.count, today(), args.reset, args.if_empty)
+    if seeded:
+        print(f"Seeded {args.count:,} employees in {timer.perf_counter() - started:.1f}s")
+    else:
+        print("Employees already exist; nothing seeded.")
 
 
 if __name__ == "__main__":
