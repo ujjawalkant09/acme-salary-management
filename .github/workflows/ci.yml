@@ -39,18 +39,22 @@ jobs:
       - run: npm test -- --run
       - run: npm run build
 
-  # The as-user oracle harness itself (the oracles run against the real app below).
+  # The as-user oracle harness and its skill (the oracles run against the real app below).
   e2e-harness:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: e2e } }
+    env: { SKILL: ../.claude/skills/as-user-oracles }
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
+      - run: uv run ruff check . "$SKILL" --config pyproject.toml
+      - run: uv run ruff format --check . "$SKILL" --config pyproject.toml
       - run: uv run pytest
+      - run: uv run pytest "$SKILL/tests"
+      - run: uvx --from shellcheck-py shellcheck "$SKILL"/scripts/*.sh
+      - run: npx --yes bats@1.11.1 "$SKILL/tests"
 
   deploy-scripts:
     runs-on: ubuntu-latest
