@@ -131,3 +131,14 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | The worker fetches exchange rates after 16:00 UTC, once a day | The ECB publishes around 16:00 CET |
 | Tests hash passwords with bcrypt cost 4 (the app uses the default, 12) | The full backend suite runs in ~4 s |
 | Frontend: shadcn/ui components written into `src/components/ui` by hand, `oxlint` for linting, newest package majors (React 19, React Router 8, TanStack Table 9, Vite 8) | No interactive CLI step; fast lint; current APIs |
+
+## As-user oracles (15 Oct 2026)
+| Decision | Why |
+|---|---|
+| Real-browser checks ("as-user oracles") in `e2e/`: one file per feature with numbered scenarios S1, S2…, each ending GREEN, RED or SKIP, plus a `.md` click path per feature. Playwright for Python, in its own uv project | They catch what unit and API tests can't: what the form actually sends, what each role sees, a retried save. Python keeps them in the backend's toolchain; a separate project keeps Playwright out of the production image |
+| Committed in `e2e/` and run in CI against the production image on Postgres (and so before every deploy), not kept as a local Claude skill | `.claude/skills/` is not pushed; checks that guard releases belong in the repo |
+| `/api/v1/health` reports the build commit (`GIT_COMMIT`, set by CI and `deploy.sh`); the runner refuses to test a build from another commit | A RED against an old build blames the wrong code. A commit hash reveals nothing a reviewer of this repo can't see |
+| Scenarios that change data SKIP unless `ORACLE_ALLOW_WRITES=1`; each uses its own seeded employee | A read-only run is safe against a working database or the demo; write scenarios can't interfere with each other |
+| Selectors are roles, labels and visible text; a `data-testid` only where text is fragile (`current-salary`) | Tests what a person sees and stays readable; no test ids sprinkled everywhere |
+| The browser runs in UTC | The salary form dates "today" from the browser's clock and the server uses UTC; in India between 00:00 and 05:30 a local "today" is the server's tomorrow and would be saved as an upcoming change |
+| Each role signs in once per run and later scenarios reuse its cookie | One full run signs in 4 times, under the 5-a-minute limit, so it also works against the rate-limited demo |
