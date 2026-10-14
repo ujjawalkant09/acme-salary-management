@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+*.db
+*.sqlite3
+.pytest_cache/
+.ruff_cache/
+.coverage
+node_modules/
+dist/
+.DS_Store
+
+# Not pushed until the author says so
+.claude/skills/
+.claude/settings.local.json
+
+# The hiring team's brief and other Word files stay out of the public repo
+*.docx
+~$*.docx
