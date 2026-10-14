@@ -1,0 +1,77 @@
+@import 'tailwindcss';
+
+/* Tokens from docs/design/05-UI.md. Light only (no dark mode). */
+@theme {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-background: #ffffff;
+  --color-side: #fafafb;
+  --color-subtle: #f7f7f9;
+  --color-border: #e5e6eb;
+  --color-foreground: #1b1c22;
+  --color-muted: #6b6e7a;
+  --color-faint: #9a9ca6;
+  --color-primary: #2b50d6;
+  --color-primary-hover: #2342b5;
+  --color-primary-soft: #eef2fd;
+  --color-band: #c9d5fa;
+  --color-band-line: #c3c6d0;
+  --color-amber: #b45309;
+  --color-amber-soft: #fdf3e7;
+  --color-green: #15803d;
+  --color-error: #c4321e;
+
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.75rem;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  /* Every size is in rem, so the whole UI grows with the screen: 16px up to a 1280px-wide
+     window, about 18px on a 1728px laptop, 19px at 1920 and 22px at 2560 and wider. */
+  html {
+    font-size: clamp(16px, calc(9.6px + 0.5vw), 22px);
+  }
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  mark {
+    background: #fff3b0;
+    color: inherit;
+    border-radius: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

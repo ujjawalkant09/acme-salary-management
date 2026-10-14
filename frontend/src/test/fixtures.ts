@@ -1,0 +1,48 @@
+import type { Employee, EmployeeListItem } from '@/lib/types'
+
+export const LIST_ITEM: EmployeeListItem = {
+  id: 7,
+  employee_code: 'ACM-004521',
+  first_name: 'Asha',
+  last_name: 'Verma',
+  email: 'asha.verma@acme.example',
+  job_title: 'Software Engineer',
+  job_level: 3,
+  department_id: 1,
+  department: 'Engineering',
+  country_code: 'IN',
+  city: 'Pune',
+  employment_type: 'full_time',
+  fte: '1.000',
+  status: 'active',
+  current_salary: '1840000.00',
+  current_currency: 'INR',
+  current_salary_usd: '22080.00',
+}
+
+export const EMPLOYEE: Employee = {
+  ...LIST_ITEM,
+  gender: null,
+  hire_date: '2022-04-01',
+  left_on: null,
+  salary_effective_date: '2026-04-01',
+  version: 4,
+  photo_url: null,
+  created_at: '2022-04-01T09:00:00Z',
+  updated_at: '2026-04-01T09:00:00Z',
+  updated_by_name: 'Priya Sharma',
+  rates_date: '2026-10-13',
+  upcoming_salary: null,
+  peers: {
+    count: 14,
+    currency: 'INR',
+    min: '1400000.00',
+    p25: '1600000.00',
+    median: '1700000.00',
+    p75: '1800000.00',
+    max: '2100000.00',
+    employee_value: '1840000.00',
+    diff_from_median_pct: '8.24',
+    is_outlier: false,
+  },
+}
