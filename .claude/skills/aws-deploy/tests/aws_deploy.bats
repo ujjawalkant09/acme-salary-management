@@ -5,6 +5,8 @@ SKILL=$(cd "$BATS_TEST_DIRNAME/.." && pwd)
 GODADDY_SECRET_PART=s3cr3tPart
 
 setup() {
+  # Tests run on GitHub too; each test opts in to GitHub Actions behaviour itself.
+  unset GITHUB_ACTIONS
   export PATH="$SKILL/tests/stubs:$PATH"
   export STUB_LOG="$BATS_TEST_TMPDIR/calls.log" STUB_STDIN_LOG="$BATS_TEST_TMPDIR/stdin.log"
   : >"$STUB_LOG"
