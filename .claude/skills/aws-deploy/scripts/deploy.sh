@@ -77,7 +77,7 @@ push_image() {
   # Docker's default builder cannot export a cache, so builds use their own BuildKit container.
   docker buildx inspect acme-builder >/dev/null 2>&1 ||
     docker buildx create --name acme-builder --driver docker-container >/dev/null
-  docker buildx build --builder acme-builder --platform linux/arm64 \
+  docker buildx build --builder acme-builder --platform linux/arm64 --build-arg GIT_COMMIT="$tag" \
     --cache-from "type=registry,ref=$repo_uri:buildcache" \
     --cache-to "type=registry,ref=$repo_uri:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" \
     --tag "$repo_uri:$tag" --push "$REPO_ROOT"

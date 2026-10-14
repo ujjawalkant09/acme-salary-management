@@ -39,6 +39,23 @@ jobs:
       - run: npm test -- --run
       - run: npm run build
 
+  # The as-user oracle harness and its skill (the oracles run against the real app below).
+  e2e-harness:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: e2e } }
+    env: { SKILL: ../.claude/skills/as-user-oracles }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync --frozen
+      - run: uv run ruff check . "$SKILL" --config pyproject.toml
+      - run: uv run ruff format --check . "$SKILL" --config pyproject.toml
+      - run: uv run pytest
+      - run: uv run pytest "$SKILL/tests"
+      - run: uvx --from shellcheck-py shellcheck "$SKILL"/scripts/*.sh
+      - run: npx --yes bats@1.11.1 "$SKILL/tests"
+
   deploy-scripts:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: .claude/skills/aws-deploy } }
@@ -84,6 +101,7 @@ jobs:
           context: .
           tags: acme:ci
           load: true
+          build-args: GIT_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Migrate and seed twice (the second run must change nothing)
@@ -94,7 +112,8 @@ jobs:
           grep -q "nothing seeded" <<<"$second"
       - name: Start the app and the worker
         run: |
-          ${RUN/--rm/-d --name app} acme:ci
+          # No rate limit: this job's curl sign-in plus the oracles' would pass 5 sign-ins a minute.
+          ${RUN/--rm/-d --name app} -e RATE_LIMIT_ENABLED=false acme:ci
           ${RUN/--rm/-d --name worker} acme:ci python -m app.worker
           for i in $(seq 1 30); do curl -fsS localhost:8000/api/v1/health && break; sleep 2; done
       - name: Health, UI, login and a worker that stays up
@@ -109,5 +128,20 @@ jobs:
           sleep 5
           [ "$(docker inspect -f '{{.State.Running}}' worker)" = true ]
           if docker logs worker 2>&1 | grep -q Traceback; then echo "worker crashed"; exit 1; fi
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - name: As-user oracles in a real browser
+        working-directory: e2e
+        env:
+          DEMO_ADMIN_PASSWORD: ci-admin-password
+          DEMO_VIEWER_PASSWORD: ci-viewer-password
+          ORACLE_ALLOW_WRITES: "1"
+        run: |
+          uv sync --frozen
+          uv run playwright install --with-deps chromium
+          uv run python oracle_kit.py all
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: oracle-screenshots, path: e2e/screenshots, if-no-files-found: ignore }
       - if: failure()
         run: docker logs app; docker logs worker

@@ -5,6 +5,7 @@ import type { ReactElement } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { vi } from 'vitest'
 
+import { UserContext } from '@/lib/auth'
 import { ME_KEY } from '@/lib/queryClient'
 import { LocationProbe } from '@/test/LocationProbe'
 import type { Meta, User } from '@/lib/types'
@@ -54,12 +55,14 @@ export function renderApp(ui: ReactElement, { user = ADMIN, route = '/', path = 
     client,
     ...render(
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={[route]}>
-          <Routes>
-            <Route path={path} element={ui} />
-          </Routes>
-          <LocationProbe />
-        </MemoryRouter>
+        <UserContext value={user}>
+          <MemoryRouter initialEntries={[route]}>
+            <Routes>
+              <Route path={path} element={ui} />
+            </Routes>
+            <LocationProbe />
+          </MemoryRouter>
+        </UserContext>
       </QueryClientProvider>,
     ),
   }

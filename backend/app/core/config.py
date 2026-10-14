@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     cors_origins: list[str] = []
     log_level: str = "INFO"
     frontend_dist: Path = Path("../frontend/dist")
+    # Set in the image at build time; empty when running from source.
+    git_commit: str | None = None
 
     @property
     def max_upload_bytes(self) -> int:

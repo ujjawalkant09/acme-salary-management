@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { createContext, useContext } from 'react'
 
 import { api, ApiError } from '@/lib/api'
 import { ME_KEY } from '@/lib/queryClient'
@@ -18,11 +19,15 @@ export function useMe() {
   return useQuery({ queryKey: ME_KEY, queryFn: fetchMe, staleTime: Infinity })
 }
 
+/** The signed-in user, provided by App around the signed-in app only. Pages read it from here,
+ * not from the query, so none of them can render with a user who just signed out. */
+export const UserContext = createContext<User | null>(null)
+
 /** For components inside the signed-in app shell, where the user is always known. */
 export function useUser(): User {
-  const { data } = useMe()
-  if (!data) throw new Error('useUser must be used inside the signed-in app')
-  return data
+  const user = useContext(UserContext)
+  if (!user) throw new Error('useUser must be used inside the signed-in app')
+  return user
 }
 
 export function useIsAdmin(): boolean {
@@ -43,8 +48,9 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => api<void>('/auth/logout', { method: 'POST' }),
     onSettled: () => {
-      client.clear()
+      // Signed out first, so the app shows sign-in before the shell can read a missing user.
       client.setQueryData(ME_KEY, null)
+      client.removeQueries({ predicate: (query) => query.queryKey[0] !== ME_KEY[0] })
     },
   })
 }
