@@ -13,6 +13,9 @@ from app.core.rate_limit import limiter, rate_limit_exceeded
 from app.routers import auth, employees, files, imports, insights, meta
 
 API_PREFIX = "/api/v1"
+# Vite puts a content hash in every asset name, so a file never changes under its URL.
+# Never put files in frontend/public/assets: they keep their names and would be cached too.
+ASSET_CACHE = "public, max-age=31536000, immutable"
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -71,13 +74,22 @@ def create_app() -> FastAPI:
     return app
 
 
+class _HashedAssets(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = ASSET_CACHE
+        return response
+
+
 def _serve_frontend(app: FastAPI, dist) -> None:
     """Serve the built React app (production image). Unknown paths get index.html so
-    client-side routes like /people/42 work on reload."""
+    client-side routes like /people/42 work on reload. index.html is never reused without
+    asking the server: after a release it must point at the new asset names."""
     index = dist / "index.html"
     if not index.is_file():
         return
-    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+    app.mount("/assets", _HashedAssets(directory=dist / "assets"), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
@@ -86,7 +98,7 @@ def _serve_frontend(app: FastAPI, dist) -> None:
             return FileResponse(candidate)
         if path.startswith("api/"):
             raise NotFound("Not found.")
-        return FileResponse(index)
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
 app = create_app()
