@@ -9,6 +9,7 @@ setup() {
   export STUB_LOG="$BATS_TEST_TMPDIR/calls.log" STUB_STDIN_LOG="$BATS_TEST_TMPDIR/stdin.log"
   : >"$STUB_LOG"
   : >"$STUB_STDIN_LOG"
+  : >"$STUB_STDIN_LOG.files"
   export CONFIG_FILE="$BATS_TEST_TMPDIR/config.env" SECRETS_ENV_FILE="$BATS_TEST_TMPDIR/.env"
   write_config
   echo "GODADDY_API=keyPart:$GODADDY_SECRET_PART" >"$SECRETS_ENV_FILE"
@@ -132,13 +133,32 @@ line_of() {
 
 # --- secrets ---
 
-@test "secrets: only missing secrets are created, with values only on stdin" {
+@test "secrets: only missing secrets are created, with values never in the command" {
   STUB_MISSING="/acme-salary/SECRET_KEY	/acme-salary/DEMO_VIEWER_PASSWORD" in_deploy "ensure_secrets"
   [ "$status" -eq 0 ]
   [ "$(grep -c 'ssm put-parameter' "$STUB_LOG")" -eq 2 ]
   grep -q '"Name":"/acme-salary/SECRET_KEY"' <(jq -c . "$STUB_STDIN_LOG")
   [ "$(jq -s 'map(select(.Type == "SecureString" and (.Value | length) == 64)) | length' "$STUB_STDIN_LOG")" -eq 2 ]
   not_in "--value" "$STUB_LOG"
+  not_in "$(jq -rs '.[0].Value' "$STUB_STDIN_LOG")" "$STUB_LOG"
+}
+
+@test "secrets: each value is in an owner-only temp file that is deleted after the call" {
+  STUB_MISSING="/acme-salary/SECRET_KEY" in_deploy "ensure_secrets"
+  [ "$status" -eq 0 ]
+  local path mode
+  read -r path mode <"$STUB_STDIN_LOG.files"
+  [ "$mode" = "drwx------" ]
+  [ ! -e "$path" ]
+  [ ! -e "$(dirname "$path")" ]
+}
+
+@test "secrets: a failed AWS call still deletes the temp file" {
+  STUB_MISSING="/acme-salary/SECRET_KEY" STUB_FAIL="ssm put-parameter" in_deploy "ensure_secrets"
+  [ "$status" -ne 0 ]
+  local path mode
+  read -r path mode <"$STUB_STDIN_LOG.files"
+  [ ! -e "$(dirname "$path")" ]
 }
 
 @test "secrets: re-running with every secret present changes nothing" {

@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Fake AWS CLI for tests: records every call and answers from STUB_* variables.
 echo "aws $*" >>"$STUB_LOG"
-if [[ "$*" == *"file:///dev/stdin"* ]]; then
-  cat >>"$STUB_STDIN_LOG"
-  echo >>"$STUB_STDIN_LOG"
-fi
+# Input files (--cli-input-json file://...): keep their contents, path and folder permissions.
+for arg in "$@"; do
+  if [[ "$arg" == file://* ]]; then
+    cat "${arg#file://}" >>"$STUB_STDIN_LOG"
+    echo >>"$STUB_STDIN_LOG"
+    # shellcheck disable=SC2012  # test-only path we created; ls gives the mode string
+    echo "${arg#file://} $(ls -ld "$(dirname "${arg#file://}")" | cut -c1-10)" >>"$STUB_STDIN_LOG.files"
+  fi
+done
+[[ -n "${STUB_FAIL:-}" && "$1 $2" == "$STUB_FAIL" ]] && exit 254
 case "$1 $2" in
   "sts get-caller-identity") echo "${STUB_ARN:-arn:aws:iam::123456789012:user/acme-deployer}" ;;
   "cloudformation describe-stacks")

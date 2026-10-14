@@ -30,6 +30,8 @@ apply_stack() {
 
 # Creates any missing secret with a random value. Existing secrets are never changed,
 # so a re-run can't lock the app out of its own database.
+# The AWS CLI can't read --cli-input-json from a pipe, so each value goes through a
+# private temp file (owner-only, deleted right after the call, also on failure).
 ensure_secrets() {
   local names=() missing name
   for name in "${SECRET_NAMES[@]}"; do names+=("$PARAM_PATH/$name"); done
@@ -37,10 +39,21 @@ ensure_secrets() {
   for name in $missing; do
     [[ "$name" == "None" ]] && continue
     log "Creating secret $name"
-    openssl rand -hex 32 | tr -d '\n' |
-      jq -Rs --arg name "$name" '{Name: $name, Value: ., Type: "SecureString"}' |
-      aws ssm put-parameter --cli-input-json file:///dev/stdin >/dev/null
+    put_secret "$name"
   done
+}
+
+put_secret() {
+  local dir status=0
+  dir=$(umask 077 && mktemp -d)
+  openssl rand -hex 32 | tr -d '\n' |
+    jq -Rs --arg name "$1" '{Name: $name, Value: ., Type: "SecureString"}' >"$dir/input.json" ||
+    status=$?
+  if ((status == 0)); then
+    aws ssm put-parameter --cli-input-json "file://$dir/input.json" >/dev/null || status=$?
+  fi
+  rm -rf "$dir"
+  return "$status"
 }
 
 image_tag() {
