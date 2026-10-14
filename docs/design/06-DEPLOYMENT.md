@@ -33,7 +33,7 @@ The app, database and file storage share the region: no cross-region delay or tr
 ```mermaid
 flowchart LR
     User[HR Admin / HR Viewer] -- "HTTPS :443" --> Caddy
-    subgraph EC2["EC2 t3.small, Mumbai (Docker Compose)"]
+    subgraph EC2["EC2 t4g.small, Mumbai (Docker Compose)"]
       Caddy[Caddy: HTTPS, automatic certificate] --> App[Web app container: FastAPI + built React UI]
       App --> PG[(Postgres container, data on EBS disk)]
       Worker[Worker container: imports, daily rate fetch] --> PG
@@ -45,7 +45,7 @@ flowchart LR
     GHA[GitHub Actions] -- "OIDC: short-lived role" --> ECR[(ECR image registry)]
     GHA -- "SSM Run Command: pull and restart" --> EC2
 ```
-- **Instance:** `t3.small` (2 vCPU, 2 GB RAM), 20 GB encrypted EBS disk, Ubuntu LTS with automatic security updates, an **Elastic IP** so the address never changes.
+- **Instance:** `t4g.small` (Graviton/ARM, 2 vCPU, 2 GB RAM), 20 GB encrypted EBS disk, Ubuntu LTS (arm64) with automatic security updates, an **Elastic IP** so the address never changes.
 - **Containers (Docker Compose):**
   - **Caddy** serves HTTPS and gets a free Let's Encrypt certificate automatically. It needs a hostname: a domain if you have one, otherwise a free `<elastic-ip>.sslip.io` name that points to the server.
   - **Web app**: the one image we build (FastAPI serving the API and the built React UI).
@@ -55,16 +55,29 @@ flowchart LR
 - **Firewall (security group):** only ports 80 and 443 are open. **No SSH port**: admin access uses AWS Systems Manager (Session Manager), so there are no SSH keys to lose.
 - **Files:** photos, documents and import uploads go to a private, encrypted **S3** bucket (public access blocked; downloads through short-lived signed links). The server reaches S3 through its **IAM instance role**, so there are no access keys.
 - **Logs:** containers send structured logs to **CloudWatch Logs** through Docker's `awslogs` driver (Q38). No alerting or tracing.
-- **Rough cost:** about $20–25 a month (`t3.small` ~$15, disk ~$2, Elastic IP ~$4, S3 and logs pennies). New AWS accounts get sign-up credits. These are estimates; check AWS pricing.
+- **Rough cost:** about $18–23 a month (`t4g.small` ~$13, disk ~$2, Elastic IP ~$4, S3 and logs pennies). New AWS accounts get sign-up credits. These are estimates; check AWS pricing.
 
 ## 5. Backups and recovery
 - **Nightly database dump** (`pg_dump`, compressed) uploaded to S3 by a small cron container; S3 keeps 14 days, then deletes old dumps automatically.
 - **Weekly EBS snapshot** of the whole disk (Amazon Data Lifecycle Manager), 4 kept.
 - **Restore:** start a fresh server from the setup script, restore the latest dump; target about 2 hours. Documented and tried once before the demo.
 
-## 6. Setup and deploys (no Terraform)
-- `deploy/` in the repo holds: `docker-compose.prod.yml`, `Caddyfile`, `bootstrap.sh` (installs Docker, the CloudWatch log driver settings and the backup cron; run once as EC2 user data) and a step-by-step `README.md` for the one-time AWS setup (instance, Elastic IP, security group, IAM roles, S3 bucket, ECR repository).
-- **Deploy on merge to `main`:** GitHub Actions runs the tests, builds the image, pushes it to ECR (signed in through OIDC, no stored AWS keys), then uses **SSM Run Command** to tell the server to `docker compose pull && docker compose up -d`. Database migrations run when the app starts. A smoke test calls `/api/v1/health`; on failure the previous image tag is restored with the same command.
+## 6. Setup, deploys and turning the server off (CloudFormation, no Terraform)
+Everything lives in the Claude skill **`.claude/skills/aws-deploy/`** (git-ignored like all skills until the author publishes them). From the repo root:
+
+| Command | What it does |
+|---|---|
+| `scripts/deploy.sh` | Creates everything on the first run, releases the current commit on every later run; a second run changes nothing |
+| `scripts/deploy.sh --plan` | Shows the CloudFormation change set without applying it |
+| `scripts/server.sh start [hours]` / `stop` / `status` | Turns the demo server on and off to save money (below) |
+| `scripts/logins.sh`, `scripts/destroy.sh` | Author only, in their own terminal (they refuse when output is captured) |
+
+- **Infrastructure** is one CloudFormation template, `infra/stack.yml`: a small VPC with one public subnet, the security group (80/443 only), the `t4g.small` server with its Elastic IP and IAM instance role, the S3 bucket (14-day expiry on `backups/`), the ECR repository, the CloudWatch log group, the weekly snapshot policy and the **$10 monthly budget alert**. CloudFormation needs only the AWS CLI, keeps no local state file and rolls back a failed change by itself. The Ubuntu image id is fixed when the stack is first created, so later runs never replace the server.
+- **What `deploy.sh` does:** (1) checks the tools and the AWS identity (refuses root keys); (2) applies the stack; (3) creates the SSM secrets with random values **only if they don't exist yet**, so a re-run never changes the database password; (4) builds the image for `linux/arm64` and pushes it to ECR tagged with the git commit (clean tree required); (5) sets the `acme` A record for `docrelay.io` through the **GoDaddy API** (token read from the git-ignored `.env`) and waits until it resolves; (6) copies `server/` to the server through S3 and runs `remote-update.sh` with SSM Run Command: it writes the root-only `.env` straight from SSM, pulls the image, runs `alembic upgrade head`, swaps the containers and goes back to the previous image if the app is unhealthy; (7) checks `https://acme.docrelay.io/api/v1/health`; (8) schedules the auto-stop.
+- **Turning the server off:** `server.sh stop` backs up the database and files to S3, then stops the server. `server.sh start` starts it and schedules it to back up and stop itself after 4 hours (configurable; running `start` again resets the timer). The Elastic IP stays attached, so the address and DNS never change. Stopped, the setup costs about $6 a month (address and disk); running adds about 2 cents an hour. The $10 budget is an email alert (80% actual, 100% forecast), not a cap.
+- **Credentials:** the AWS keys stay in the author's `~/.aws` profile (an IAM user, never root); keys exported in the shell are ignored so the profile can't be overridden. The server uses only its instance role. Secrets travel only through pipes: never in command arguments, SSM command text, CloudFormation parameters, the image or logs. The skill's rules forbid Claude from reading `.env`, AWS credentials or secret values.
+- **Checks:** `shellcheck`, `cfn-lint` and 27 `bats` tests with stubbed `aws`/`curl`/`dig` (no network), including tests that the GoDaddy token and generated secrets never appear in command arguments.
+- **Deploy on merge to `main`** (built with CI at step 15): GitHub Actions builds the arm64 image on an ARM runner, pushes it to ECR through an OIDC role (no stored AWS keys) and runs the same `remote-update.sh` on the server through SSM.
 
 ## 7. Secrets management
 **Rule: no secret is ever in the repo, the Docker image or the logs.**
