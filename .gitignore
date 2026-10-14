@@ -11,8 +11,10 @@ node_modules/
 dist/
 .DS_Store
 
-# Not pushed until the author says so
-.claude/skills/
+# Skills are not pushed until the author says so; aws-deploy is published (its config.env stays local)
+.claude/skills/*
+!.claude/skills/aws-deploy/
+.claude/skills/aws-deploy/config.env
 .claude/settings.local.json
 
 # The hiring team's brief and other Word files stay out of the public repo

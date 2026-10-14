@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Fake AWS CLI for tests: records every call and answers from STUB_* variables.
+echo "aws $*" >>"$STUB_LOG"
+if [[ "$*" == *"file:///dev/stdin"* ]]; then
+  cat >>"$STUB_STDIN_LOG"
+  echo >>"$STUB_STDIN_LOG"
+fi
+case "$1 $2" in
+  "sts get-caller-identity") echo "${STUB_ARN:-arn:aws:iam::123456789012:user/acme-deployer}" ;;
+  "cloudformation describe-stacks")
+    [[ -n "${STUB_NO_STACK:-}" ]] && exit 254
+    case "$*" in
+      *InstanceId*) echo i-0abc ;;
+      *PublicIp*) echo 203.0.113.10 ;;
+      *BucketName*) echo acme-bucket ;;
+    esac
+    ;;
+  "ec2 describe-instances") echo "${STUB_STATE:-running}" ;;
+  "ssm describe-instance-information") echo Online ;;
+  "ssm get-parameters") echo "${STUB_MISSING:-None}" ;;
+  "ssm send-command") echo cmd-1 ;;
+  "ssm get-command-invocation")
+    if [[ "$*" == *"--query Status"* ]]; then echo "${STUB_REMOTE_STATUS:-Success}"; else echo "remote output"; fi
+    ;;
+esac
+exit 0

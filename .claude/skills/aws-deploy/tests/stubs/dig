@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake dig for tests.
+echo "${STUB_DIG_IP:-203.0.113.10}"

@@ -5,6 +5,7 @@ Read before building: [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md), [docs/ARC
 
 ## Git and GitHub
 - **Never push `.claude/skills/` to GitHub until the author explicitly says so.** It is listed in `.gitignore`; do not remove that entry, force-add it, or commit skill files on your own.
+  The one exception, approved by the author: `.claude/skills/aws-deploy/` is committed (never its `config.env`).
 - Commit or push only when asked. Small commits, one per step, with clear messages.
 - Commit messages carry **no AI-tool attribution lines** (no `Co-Authored-By: Claude`, no "Generated with").
 - Never commit secrets, `.env`, databases or build output.

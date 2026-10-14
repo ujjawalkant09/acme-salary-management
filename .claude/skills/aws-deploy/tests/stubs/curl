@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake curl for tests: records arguments and stdin (where headers arrive), prints STUB_CURL_OUT.
+echo "curl $*" >>"$STUB_LOG"
+if [[ "$*" == *"-H @-"* ]]; then
+  cat >>"$STUB_STDIN_LOG"
+fi
+echo "${STUB_CURL_OUT:-[]}"
