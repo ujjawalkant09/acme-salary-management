@@ -2,8 +2,10 @@
 # commit to https://acme.docrelay.in. It starts the server if it is off; the server backs up
 # and stops itself after the chosen hours.
 #
-# AWS access is a short-lived OIDC role (no keys in GitHub) that can only release: it cannot
-# change the infrastructure, IAM or secrets. Those changes run from the author's laptop.
+# AWS access is a short-lived OIDC role (no keys in GitHub). It cannot change the
+# infrastructure, IAM or the stored secrets (those changes run from the author's laptop), but
+# it runs commands on the server as root, so it can read the server's .env. Only jobs in the
+# "production" environment can use it; add required reviewers there to guard it.
 name: Deploy
 
 on:

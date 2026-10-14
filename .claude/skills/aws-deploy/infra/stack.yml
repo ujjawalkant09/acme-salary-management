@@ -243,8 +243,10 @@ Resources:
       Url: https://token.actions.githubusercontent.com
       ClientIdList: [sts.amazonaws.com]
 
-  # Release only: push the image, sync the server scripts, start the server and run the update.
-  # It cannot change the stack, IAM or secrets; those stay with the author's own profile.
+  # Release: push the image, sync the server scripts, start the server and run the update.
+  # It cannot change the stack, IAM or the SSM secrets. It is still root on the server: it
+  # runs shell commands there and writes the scripts the server runs as root, so it can read
+  # /opt/acme/.env. That is why only "production" environment jobs can assume it.
   GitHubDeployRole:
     Type: AWS::IAM::Role
     Condition: HasGitHubRepo
