@@ -25,16 +25,27 @@ load_config() {
   [[ -f "$CONFIG_FILE" ]] || die "missing $CONFIG_FILE (copy config.env.example and fill it in)"
   # shellcheck source=/dev/null
   . "$CONFIG_FILE"
-  local name
-  for name in AWS_PROFILE AWS_REGION STACK_NAME DOMAIN ALERT_EMAIL BUDGET_USD AUTO_STOP_HOURS; do
+  local name required=(AWS_REGION STACK_NAME DOMAIN ALERT_EMAIL BUDGET_USD AUTO_STOP_HOURS)
+  in_github_actions || required+=(AWS_PROFILE)
+  for name in "${required[@]}"; do
     [[ -n "${!name:-}" ]] || die "$name is empty in $CONFIG_FILE"
   done
   [[ "$BUDGET_USD" =~ ^[1-9][0-9]*$ ]] || die "BUDGET_USD must be a whole number of dollars above 0"
   [[ "$AUTO_STOP_HOURS" =~ ^[0-9]+$ ]] || die "AUTO_STOP_HOURS must be a whole number (0 = never)"
-  # Keys exported in the shell would silently win over the profile and could point at another account.
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-  export AWS_PROFILE AWS_REGION
+  if in_github_actions; then
+    # Short-lived keys from the OIDC role (aws-actions/configure-aws-credentials); no profile.
+    unset AWS_PROFILE
+  else
+    # Keys exported in the shell would silently win over the profile and could point at another account.
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+    export AWS_PROFILE
+  fi
+  export AWS_REGION
   PARAM_PATH="/$STACK_NAME"
+}
+
+in_github_actions() {
+  [[ "${GITHUB_ACTIONS:-}" == "true" ]]
 }
 
 require_tools() {
@@ -76,6 +87,21 @@ retry() {
     ((i < attempts)) && sleep "$delay"
   done
   return 1
+}
+
+# Starts the server if it is stopped and waits until it accepts commands.
+ensure_running() {
+  local instance=$1
+  case "$(instance_state "$instance")" in
+    running) ;;
+    stopped)
+      log "Starting the server"
+      aws ec2 start-instances --instance-ids "$instance" >/dev/null
+      aws ec2 wait instance-running --instance-ids "$instance"
+      ;;
+    *) die "the server is $(instance_state "$instance"); try again in a minute" ;;
+  esac
+  wait_for_ssm "$instance"
 }
 
 ssm_online() {

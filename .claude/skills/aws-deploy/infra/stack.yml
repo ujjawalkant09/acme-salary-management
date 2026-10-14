@@ -12,6 +12,14 @@ Parameters:
     Type: Number
     MinValue: 1
     Description: Monthly cost (USD) that triggers the budget alert email.
+  GitHubRepo:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: owner/repo allowed to release through the GitHub Deploy button. Empty = no GitHub access.
+
+Conditions:
+  HasGitHubRepo: !Not [!Equals [!Ref GitHubRepo, ""]]
 
 Resources:
   Vpc:
@@ -224,6 +232,70 @@ Resources:
         - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100 }
           Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
 
+  # GitHub Actions signs in with short-lived OIDC tokens: no AWS keys are stored in GitHub.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: HasGitHubRepo
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  # Release only: push the image, sync the server scripts, start the server and run the update.
+  # It cannot change the stack, IAM or secrets; those stay with the author's own profile.
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Condition: HasGitHubRepo
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref GitHubOidcProvider }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Only jobs in this repo that run in the "production" environment.
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:production
+      Policies:
+        - PolicyName: release
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Ref AWS::StackId
+              - Effect: Allow
+                Action: [ec2:DescribeInstances, ssm:DescribeInstanceInformation, ssm:GetCommandInvocation, ecr:GetAuthorizationToken]
+                Resource: "*"
+              - Effect: Allow
+                Action: ec2:StartInstances
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Server}
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Server}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt Bucket.Arn
+                Condition: { StringLike: { s3:prefix: ["deploy/*", "deploy/"] } }
+              - Effect: Allow
+                Action: [s3:PutObject, s3:DeleteObject]
+                Resource: !Sub ${Bucket.Arn}/deploy/*
+
 Outputs:
   InstanceId:
     Value: !Ref Server
@@ -235,3 +307,6 @@ Outputs:
     Value: !GetAtt Repository.RepositoryUri
   LogGroup:
     Value: !Ref LogGroup
+  DeployRoleArn:
+    Condition: HasGitHubRepo
+    Value: !GetAtt GitHubDeployRole.Arn

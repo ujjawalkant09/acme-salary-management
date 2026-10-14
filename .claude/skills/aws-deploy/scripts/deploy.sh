@@ -2,8 +2,10 @@
 # Creates or updates everything on AWS and releases the current commit to https://$DOMAIN.
 # Safe to run again: unchanged parts are left alone.
 #
-#   deploy.sh          deploy
-#   deploy.sh --plan   show what CloudFormation would change, change nothing
+#   deploy.sh            create or update everything, then release (from the author's laptop)
+#   deploy.sh --plan     show what CloudFormation would change, change nothing
+#   deploy.sh --release  only build and release the current commit to the existing stack
+#                        (used by the GitHub Deploy button; no infrastructure, secret or DNS changes)
 
 # shellcheck source=lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -12,7 +14,7 @@ UBUNTU_AMI_PARAM=/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64
 
 apply_stack() {
   local plan=$1
-  local params=("AlertEmail=$ALERT_EMAIL" "BudgetUsd=$BUDGET_USD")
+  local params=("AlertEmail=$ALERT_EMAIL" "BudgetUsd=$BUDGET_USD" "GitHubRepo=${GITHUB_REPO:-}")
   # The server image is looked up once, when the stack is first created. Later runs keep it:
   # a new image id would make CloudFormation replace the server and lose its disk.
   if ! stack_exists; then
@@ -73,8 +75,13 @@ push_image() {
   docker buildx build --platform linux/arm64 --tag "$repo_uri:$tag" --push "$REPO_ROOT"
 }
 
+# Uses the GoDaddy API only when the record is wrong, so a release needs no GoDaddy token.
 ensure_dns() {
   local ip=$1 current
+  if dns_points_to "$ip"; then
+    log "DNS: $DOMAIN already points to $ip"
+    return
+  fi
   split_domain
   current=$(godaddy GET "/records/A/$DNS_RECORD" | jq -r '.[0].data // empty') ||
     die "GoDaddy API call failed: check GODADDY_API and that your account has API access"
@@ -102,34 +109,40 @@ release() {
 }
 
 main() {
-  local plan=${1:-}
-  [[ -z "$plan" || "$plan" == "--plan" ]] || die "usage: deploy.sh [--plan]"
+  local mode=${1:-}
+  [[ -z "$mode" || "$mode" == "--plan" || "$mode" == "--release" ]] ||
+    die "usage: deploy.sh [--plan | --release]"
   load_config
   require_tools aws docker jq dig curl openssl git
   check_identity
-  if [[ "$plan" == "--plan" ]]; then
+  if [[ "$mode" == "--plan" ]]; then
     apply_stack plan
     return
   fi
   [[ -f "$REPO_ROOT/Dockerfile" ]] || die "no Dockerfile at $REPO_ROOT (the app image is built from it)"
-  godaddy_token >/dev/null
   local tag
   tag=$(image_tag)
 
-  apply_stack apply
-  ensure_secrets
+  if [[ "$mode" == "--release" ]]; then
+    stack_exists || die "nothing deployed yet; run deploy.sh from the author's laptop first"
+  else
+    apply_stack apply
+    ensure_secrets
+  fi
   local instance ip bucket repo_uri log_group
   instance=$(stack_output InstanceId)
   ip=$(stack_output PublicIp)
   bucket=$(stack_output BucketName)
   repo_uri=$(stack_output RepositoryUri)
   log_group=$(stack_output LogGroup)
-  [[ "$(instance_state "$instance")" == "running" ]] ||
-    die "the server is stopped; start it first: server.sh start"
 
   push_image "$repo_uri" "$tag"
-  ensure_dns "$ip"
-  wait_for_ssm "$instance"
+  if [[ "$mode" == "--release" ]]; then
+    dns_points_to "$ip" || die "$DOMAIN does not point to $ip; run deploy.sh from the author's laptop"
+  else
+    ensure_dns "$ip"
+  fi
+  ensure_running "$instance"
   release "$instance" "$bucket" "$repo_uri:$tag" "$log_group"
   wait_for_site
   schedule_auto_stop "$instance" "$AUTO_STOP_HOURS"

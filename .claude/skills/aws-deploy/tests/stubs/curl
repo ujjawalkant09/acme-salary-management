@@ -4,4 +4,5 @@ echo "curl $*" >>"$STUB_LOG"
 if [[ "$*" == *"-H @-"* ]]; then
   cat >>"$STUB_STDIN_LOG"
 fi
+[[ "$*" == *"-X PUT"* ]] && touch "$STUB_LOG.dns_put"
 echo "${STUB_CURL_OUT:-[]}"

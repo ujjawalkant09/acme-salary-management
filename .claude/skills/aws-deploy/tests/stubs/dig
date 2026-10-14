@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
-# Fake dig for tests.
-echo "${STUB_DIG_IP:-203.0.113.10}"
+# Fake dig for tests: answers STUB_DIG_IP_BEFORE until the fake GoDaddy PUT has run, then STUB_DIG_IP.
+if [[ -n "${STUB_DIG_IP_BEFORE:-}" && ! -e "$STUB_LOG.dns_put" ]]; then
+  echo "$STUB_DIG_IP_BEFORE"
+else
+  echo "${STUB_DIG_IP:-203.0.113.10}"
+fi

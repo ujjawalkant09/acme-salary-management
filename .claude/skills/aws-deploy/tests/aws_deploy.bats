@@ -67,6 +67,20 @@ line_of() {
   [ "$output" = "unset acme" ]
 }
 
+@test "config: in GitHub Actions the OIDC keys are kept and no profile is needed" {
+  sed -i.bak '/^AWS_PROFILE=/d' "$CONFIG_FILE"
+  GITHUB_ACTIONS=true AWS_ACCESS_KEY_ID=ASIAOIDC in_deploy 'echo "$AWS_ACCESS_KEY_ID ${AWS_PROFILE:-none}"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "ASIAOIDC none" ]
+}
+
+@test "config: outside GitHub Actions a missing profile is rejected" {
+  sed -i.bak '/^AWS_PROFILE=/d' "$CONFIG_FILE"
+  in_deploy "true"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"AWS_PROFILE is empty"* ]]
+}
+
 @test "identity: root account keys are refused" {
   STUB_ARN=arn:aws:iam::123456789012:root in_deploy "check_identity"
   [ "$status" -eq 1 ]
@@ -109,7 +123,7 @@ line_of() {
 }
 
 @test "dns: a wrong record is updated and the token never appears in command arguments" {
-  STUB_CURL_OUT='[{"data":"198.51.100.1"}]' in_deploy "ensure_dns 203.0.113.10"
+  STUB_DIG_IP_BEFORE=198.51.100.1 STUB_CURL_OUT='[{"data":"198.51.100.1"}]' in_deploy "ensure_dns 203.0.113.10"
   [ "$status" -eq 0 ]
   grep -q -- "-X PUT .*records/A/acme" "$STUB_LOG"
   grep -q '"data":"203.0.113.10"' "$STUB_LOG"
@@ -117,10 +131,11 @@ line_of() {
   grep -q "sso-key keyPart:$GODADDY_SECRET_PART" "$STUB_STDIN_LOG"
 }
 
-@test "dns: a correct record is left alone" {
-  STUB_CURL_OUT='[{"data":"203.0.113.10"}]' in_deploy "ensure_dns 203.0.113.10"
+@test "dns: a record that already resolves is left alone without calling GoDaddy" {
+  rm "$SECRETS_ENV_FILE"
+  in_deploy "ensure_dns 203.0.113.10"
   [ "$status" -eq 0 ]
-  not_in "-X PUT" "$STUB_LOG"
+  not_in "curl" "$STUB_LOG"
   [[ "$output" == *"already points to"* ]]
 }
 
@@ -192,6 +207,52 @@ line_of() {
   REPO_ROOT="$repo" in_deploy "image_tag"
   [ "$status" -eq 0 ]
   [ "$output" = "$(git -C "$repo" rev-parse --short=12 HEAD)" ]
+}
+
+# --- release only (GitHub Deploy button) ---
+
+# release_repo: a committed repo with a Dockerfile, for end-to-end deploy runs.
+release_repo() {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  git init -q "$repo"
+  touch "$repo/Dockerfile"
+  git -C "$repo" add Dockerfile
+  git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m init
+  echo "$repo"
+}
+
+@test "release: changes no infrastructure or secrets and never needs the GoDaddy token" {
+  rm "$SECRETS_ENV_FILE"
+  REPO_ROOT=$(release_repo) run "$SKILL/scripts/deploy.sh" --release
+  [ "$status" -eq 0 ]
+  not_in "cloudformation deploy" "$STUB_LOG"
+  not_in "put-parameter" "$STUB_LOG"
+  not_in "api.godaddy.com" "$STUB_LOG"
+  grep -q "remote-update.sh" "$STUB_LOG"
+  grep -q "auto-stop.sh 4" "$STUB_LOG"
+}
+
+@test "release: a stopped server is started first" {
+  STUB_STATE=stopped REPO_ROOT=$(release_repo) run "$SKILL/scripts/deploy.sh" --release
+  [ "$status" -eq 0 ]
+  local start update
+  start=$(line_of "ec2 start-instances")
+  update=$(line_of "remote-update.sh")
+  [ -n "$start" ]
+  [ "$start" -lt "$update" ]
+}
+
+@test "release: refuses when the domain does not point to the server" {
+  STUB_DIG_IP=198.51.100.9 REPO_ROOT=$(release_repo) run "$SKILL/scripts/deploy.sh" --release
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not point to"* ]]
+  not_in "remote-update.sh" "$STUB_LOG"
+}
+
+@test "release: refuses before anything is deployed" {
+  STUB_NO_STACK=1 REPO_ROOT=$(release_repo) run "$SKILL/scripts/deploy.sh" --release
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"run deploy.sh from the author's laptop first"* ]]
 }
 
 # --- server on/off ---

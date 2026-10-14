@@ -18,16 +18,7 @@ status() {
 start() {
   local instance=$1 hours=$2
   [[ "$hours" =~ ^[0-9]+$ ]] || die "hours must be a whole number"
-  case "$(instance_state "$instance")" in
-    running) log "Server is already running" ;;
-    stopped)
-      log "Starting the server"
-      aws ec2 start-instances --instance-ids "$instance" >/dev/null
-      aws ec2 wait instance-running --instance-ids "$instance"
-      ;;
-    *) die "the server is $(instance_state "$instance"); try again in a minute" ;;
-  esac
-  wait_for_ssm "$instance"
+  ensure_running "$instance"
   wait_for_site
   schedule_auto_stop "$instance" "$hours"
 }

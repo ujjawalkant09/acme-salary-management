@@ -12,6 +12,7 @@ All commands run from the repo root on the author's laptop.
 |---|---|---|
 | Deploy / release the current commit | `.claude/skills/aws-deploy/scripts/deploy.sh` | Claude or the author |
 | Preview infrastructure changes only | `.claude/skills/aws-deploy/scripts/deploy.sh --plan` | Claude or the author |
+| Release only (no infrastructure, secret or DNS changes) | `.claude/skills/aws-deploy/scripts/deploy.sh --release` | GitHub Deploy button, Claude or the author |
 | Is it on? | `.claude/skills/aws-deploy/scripts/server.sh status` | Claude or the author |
 | Turn it on for a demo | `.claude/skills/aws-deploy/scripts/server.sh start [hours]` | Claude or the author |
 | Turn it off | `.claude/skills/aws-deploy/scripts/server.sh stop` | Claude or the author |
@@ -26,6 +27,9 @@ All commands run from the repo root on the author's laptop.
 - Never add `set -x`, `--debug` or extra logging to these scripts: it would print secrets.
 - Never change the scripts so a secret travels in a command-line argument, SSM command text, CloudFormation parameter, Docker image or log. Secrets only travel through pipes.
 - If a command's output ever shows a secret, stop, tell the author which secret to rotate, and don't repeat it.
+
+## GitHub Deploy button
+`.github/workflows/deploy.yml` (Actions > Deploy > Run workflow, `main` only) runs every CI check, then `deploy.sh --release` on an ARM runner. It signs in with the stack's `GitHubDeployRole` through OIDC: no AWS keys in GitHub, and the role can only release. One-time setup, after `GITHUB_REPO` is set in `config.env` and `deploy.sh` has run: repo variable `AWS_DEPLOY_ROLE_ARN` (stack output `DeployRoleArn`), repo secret `ALERT_EMAIL`, and an environment named `production`.
 
 ## How it works
 - **`deploy.sh`**: checks tools and the AWS identity (refuses root keys); applies `infra/stack.yml` with CloudFormation; creates missing secrets in SSM Parameter Store with random values (never changes existing ones); builds the image for `linux/arm64` from the repo-root `Dockerfile` and pushes it to ECR tagged with the commit (needs a clean git tree); points `acme` in GoDaddy at the Elastic IP; copies `server/` to the server through S3 and runs `remote-update.sh` with SSM; waits for `https://$DOMAIN/api/v1/health`; schedules the auto-stop.
