@@ -554,15 +554,22 @@ def _update_from_row(
 
 
 # ---------- worker loop pieces ----------
-def claim_next_job(db: Session) -> ImportJob | None:
-    """Claim one queued job. `SKIP LOCKED` lets several workers share the queue safely."""
-    job = db.scalar(
+def next_job_query():
+    """The oldest queued job. `SKIP LOCKED` lets several workers share the queue safely.
+    `of=ImportJob` locks only the job row: Postgres refuses FOR UPDATE on the outer join
+    that loads the job's creator."""
+    return (
         select(ImportJob)
         .where(ImportJob.status.in_(("queued", "commit_queued")))
         .order_by(ImportJob.created_at)
         .limit(1)
-        .with_for_update(skip_locked=True)
+        .with_for_update(skip_locked=True, of=ImportJob)
     )
+
+
+def claim_next_job(db: Session) -> ImportJob | None:
+    """Claim one queued job."""
+    job = db.scalar(next_job_query())
     if job is None:
         return None
     job.status = "validating" if job.status == "queued" else "committing"

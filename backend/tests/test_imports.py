@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from sqlalchemy.dialects import postgresql
 
 from app.models import Employee, ImportJob, SalaryRecord
 from app.services import imports as service
@@ -358,3 +359,11 @@ def test_viewers_cannot_import_but_can_see_history(viewer_client, admin_client):
 def test_unknown_import_is_404(admin_client):
     for path in ("/nope", "/nope/rows", "/nope/errors.csv"):
         assert admin_client.get(API + path).status_code == 404
+
+
+def test_job_claim_locks_only_the_job_row_on_postgres():
+    """Tests run on SQLite, which ignores FOR UPDATE; Postgres rejects it on the outer join
+    that loads the job's creator, so the lock must name the job table only."""
+    sql = str(service.next_job_query().compile(dialect=postgresql.dialect()))
+    assert "LEFT OUTER JOIN users" in sql
+    assert sql.endswith("FOR UPDATE OF import_jobs SKIP LOCKED")
