@@ -72,7 +72,8 @@ push_image() {
   fi
   log "Building and pushing image $tag (linux/arm64)"
   aws ecr get-login-password | docker login --username AWS --password-stdin "${repo_uri%%/*}" >/dev/null
-  docker buildx build --platform linux/arm64 --tag "$repo_uri:$tag" --push "$REPO_ROOT"
+  docker buildx build --platform linux/arm64 --build-arg GIT_COMMIT="$tag" \
+    --tag "$repo_uri:$tag" --push "$REPO_ROOT"
 }
 
 # Uses the GoDaddy API only when the record is wrong, so a release needs no GoDaddy token.

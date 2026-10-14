@@ -1,3 +1,4 @@
+from app.core.config import get_settings
 from app.core.rate_limit import limiter
 from app.models import User
 
@@ -74,7 +75,12 @@ def test_login_is_rate_limited(anon_client, monkeypatch):
 
 def test_health_needs_no_sign_in_and_responses_carry_headers(anon_client):
     response = anon_client.get("/api/v1/health")
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {"status": "ok", "commit": None}
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert "default-src 'self'" in response.headers["Content-Security-Policy"]
     assert response.headers["X-Request-ID"]
+
+
+def test_health_reports_the_build_commit_when_the_image_sets_one(anon_client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "git_commit", "390abb9c1d2e")
+    assert anon_client.get("/api/v1/health").json() == {"status": "ok", "commit": "390abb9c1d2e"}

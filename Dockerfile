@@ -27,5 +27,8 @@ RUN useradd --system --uid 1000 --home-dir /app acme && mkdir -p /data/storage \
     && chown acme /data/storage
 USER acme
 ENV FRONTEND_DIST=/app/frontend/dist STORAGE_DIR=/data/storage
+# Last, so a new commit doesn't rebuild the layers above. /health reports it.
+ARG GIT_COMMIT
+ENV GIT_COMMIT=$GIT_COMMIT
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
