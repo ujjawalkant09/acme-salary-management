@@ -139,7 +139,7 @@ function SalaryCard({ employee: e }: { employee: Employee }) {
     <Section title="Yearly salary">
       <div className="px-5 py-4.5">
         <div className="text-3xl leading-tight font-semibold tracking-tight">
-          {money(e.current_salary, local)}
+          <span data-testid="current-salary">{money(e.current_salary, local)}</span>
           {local !== 'USD' && <small className="ml-2 text-base font-normal tracking-normal text-muted">≈ {usd(e.current_salary_usd)}</small>}
         </div>
         <p className="mt-1.5 text-sm text-muted">
