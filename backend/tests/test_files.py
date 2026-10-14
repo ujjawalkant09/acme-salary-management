@@ -178,3 +178,14 @@ def test_removed_documents_are_purged_after_30_days(
     assert purge_removed_documents(db, storage) == 1
     assert not (storage.root / key).exists()
     assert purge_removed_documents(db, storage) == 0  # safe to re-run
+
+
+@pytest.mark.parametrize("key", ["../outside.txt", "employees/../../outside.txt", "/etc/hosts"])
+def test_storage_keys_cannot_leave_the_storage_folder(storage, key):
+    with pytest.raises(NotFound):
+        storage.put(key, b"x")
+    with pytest.raises(NotFound):
+        storage.get(key)
+    with pytest.raises(NotFound):
+        storage.delete(key)
+    assert not (storage.root.parent / "outside.txt").exists()

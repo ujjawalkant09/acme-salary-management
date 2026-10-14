@@ -2,10 +2,12 @@ import random
 import time
 from datetime import date
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select
 
+from app.core.config import get_settings
 from app.models import Department, Employee, FxRate, SalaryRecord, User
 from app.repositories import employees as repo
 from scripts import seed as seed_script
@@ -86,6 +88,30 @@ def test_seed_if_empty_leaves_existing_data_alone(session_factory):
         assert db.get(Employee, 1).first_name == first_name
 
 
+def test_seed_needs_the_demo_passwords(session_factory, monkeypatch):
+    monkeypatch.setattr(get_settings(), "demo_admin_password", None)
+    with session_factory() as db:
+        seed_script._reset(db)
+        with pytest.raises(SystemExit, match="DEMO_ADMIN_PASSWORD"):
+            seed_script.seed(db, 10, AS_OF)
+
+
+def test_seed_command_line(session_factory, monkeypatch, capsys):
+    monkeypatch.setattr(seed_script, "SessionLocal", session_factory)
+    monkeypatch.setattr("sys.argv", ["seed", "--count", "5", "--reset"])
+    seed_script.main()
+    assert "Seeded 5 employees" in capsys.readouterr().out
+    monkeypatch.setattr("sys.argv", ["seed", "--if-empty"])
+    seed_script.main()
+    assert "nothing seeded" in capsys.readouterr().out
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(Employee)) == 5
+
+
+# SQLite can't reflect the "one open import" expression index, so Alembic skips comparing it;
+# test_two_uploads_at_once_still_open_only_one_import checks that the migration created it.
+@pytest.mark.filterwarnings("ignore:.*expression-based index uq_import_jobs_one_open")
+@pytest.mark.filterwarnings("ignore:.*expression-based index 'uq_import_jobs_one_open'")
 def test_models_match_the_migration(template_db):
     """Fails if a model changed without a new Alembic migration."""
     config = Config(str(BACKEND / "alembic.ini"))

@@ -131,3 +131,9 @@ def test_refresh_rounds_half_cents_like_the_app(db, make_employee):
     db.refresh(e)
     assert e.current_salary_usd == Decimal("12.50")  # 12.505, half to even
     assert e.current_salary_usd == fx.rates_in_use(db).to_usd(e.current_salary, "INR")
+
+
+def test_no_stored_rates_yet(db):
+    db.query(FxRate).delete()
+    db.commit()
+    assert fx.rates_in_use(db) == fx.Rates(None, {}, None)

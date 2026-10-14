@@ -5,6 +5,9 @@ import httpx
 
 from app.core import idempotency
 from app.models import AppState, IdempotencyKey
+from app.schemas import SalaryChangeIn
+from app.services import employees
+from app.worker import __main__ as worker
 from app.worker import tasks
 
 
@@ -47,3 +50,44 @@ def test_expired_idempotency_keys_are_purged(db, admin, frozen_clock):
 
 def test_no_job_means_no_work(db, storage):
     assert tasks.process_next_job(db, storage) is False
+
+
+def test_worker_loop_works_until_told_to_stop(session_factory, monkeypatch):
+    """Runs the real loop: a job, then an idle poll, then SIGTERM stops it cleanly."""
+    handlers, events = {}, []
+
+    def next_job(db, storage):
+        events.append("job")
+        if events.count("job") == 1:
+            return True  # did some work: look again at once
+        handlers[worker.signal.SIGTERM](worker.signal.SIGTERM, None)
+        return False
+
+    monkeypatch.setattr(
+        worker.signal, "signal", lambda signum, handler: handlers.update({signum: handler})
+    )
+    monkeypatch.setattr(worker, "setup_logging", lambda level: None)
+    monkeypatch.setattr(worker, "SessionLocal", session_factory)
+    monkeypatch.setattr(worker, "reset_stuck_jobs", lambda db: events.append("reset"))
+    monkeypatch.setattr(worker, "process_next_job", next_job)
+    monkeypatch.setattr(worker, "daily_tasks_due", lambda: events.count("job") == 1)
+    monkeypatch.setattr(
+        worker, "run_daily_tasks", lambda db, storage, client: events.append("daily")
+    )
+    monkeypatch.setattr(worker.time, "sleep", lambda seconds: events.append("sleep"))
+
+    worker.main()
+    assert set(handlers) == {worker.signal.SIGTERM, worker.signal.SIGINT}
+    assert events == ["reset", "job", "daily", "job", "sleep"]
+
+
+def test_daily_tasks_apply_salaries_that_became_due(
+    db, storage, admin, make_employee, frozen_clock
+):
+    e = make_employee(salary="80000")
+    raise_ = SalaryChangeIn(version=1, amount="90000", effective_date="2026-11-01", reason="merit")
+    employees.change_salary(db, admin, e.id, raise_)
+    frozen_clock.set(datetime(2026, 11, 1, 9, tzinfo=UTC))  # before the rate fetch hour
+    tasks.run_daily_tasks(db, storage, counting_client([]))
+    db.refresh(e)
+    assert e.current_salary == 90000

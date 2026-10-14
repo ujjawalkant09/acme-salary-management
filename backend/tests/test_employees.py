@@ -1,13 +1,16 @@
 import csv
 import io
 import uuid
+from datetime import timedelta
 
 import pytest
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core import idempotency
+from app.core.clock import now
 from app.core.errors import Conflict
-from app.models import Employee, SalaryRecord
+from app.models import Employee, IdempotencyKey, SalaryRecord
+from app.services import employees as service
 
 API = "/api/v1/employees"
 
@@ -68,7 +71,8 @@ def test_search_matches_name_email_and_code(admin_client, make_employee):
 def test_filters_combine(admin_client, make_employee):
     make_employee(country_code="IN", salary="1000000", job_level=2)
     make_employee(country_code="IN", salary="3000000", job_level=4)
-    make_employee(country_code="US", salary="150000", job_level=4)
+    make_employee(country_code="US", salary="150000", job_level=4, department_id=2,
+                  employment_type="contractor", job_title="Data Engineer")  # fmt: skip
     get = lambda **p: admin_client.get(API, params=p).json()["total"]  # noqa: E731
     assert get(country="IN") == 2
     assert get(country=["IN", "US"]) == 3
@@ -76,6 +80,10 @@ def test_filters_combine(admin_client, make_employee):
     assert get(country="IN", level=4) == 1
     assert get(min_salary_usd="20000") == 2  # 1,000,000 INR = 12,000 USD
     assert get(max_salary_usd="12000") == 1
+    assert get(department_id=2) == 1
+    assert get(department_id=[1, 2]) == 3
+    assert get(employment_type="contractor") == 1
+    assert get(job_title="  data ENGINEER ") == 1  # case and spaces don't matter
 
 
 def test_sort_by_salary_desc_with_stable_ties(admin_client, make_employee):
@@ -214,6 +222,37 @@ def test_lost_stored_response_never_repeats_the_work(db, admin, monkeypatch):
     assert calls == [1]
 
 
+def test_blank_idempotency_key_is_rejected(admin_client, db):
+    response = admin_client.post(API, json=NEW_EMPLOYEE, headers={"Idempotency-Key": ""})
+    assert response.status_code == 422
+    assert db.query(Employee).count() == 0
+
+
+def test_same_key_racing_another_request_gets_its_response(db, admin, session_factory):
+    def work():
+        # Another request with the same key commits first...
+        with session_factory() as other:
+            other.add(IdempotencyKey(key="k1", user_id=admin.id, endpoint="test",
+                                     request_hash=idempotency.request_hash({"a": 1}),
+                                     status_code=201, response_body={"id": 7},
+                                     expires_at=now() + timedelta(hours=1)))  # fmt: skip
+            other.commit()
+        db.commit()  # ...so saving our copy of the key fails, and our work with it
+        return {"id": 8}
+
+    response = idempotency.run(db, admin, "k1", "test", {"a": 1}, work, status_code=201)
+    assert (response.status_code, response.body) == (201, b'{"id":7}')
+
+
+def test_other_integrity_errors_are_not_taken_for_a_replay(db, admin):
+    def work():
+        raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed: employees.email"))
+
+    with pytest.raises(IntegrityError):
+        idempotency.run(db, admin, "k2", "test", {}, work)
+    assert db.get(IdempotencyKey, ("k2", admin.id)) is None
+
+
 def test_failed_create_does_not_burn_the_key(admin_client, db):
     key = str(uuid.uuid4())
     bad = {**NEW_EMPLOYEE, "department_id": 999}
@@ -261,6 +300,18 @@ def test_create_with_duplicate_email_conflicts(admin_client, make_employee):
     assert "email" in response.json()["error"]["details"]["fields"]
 
 
+def test_duplicate_email_slipping_past_the_check_is_a_conflict(
+    admin_client, make_employee, monkeypatch, db
+):
+    make_employee(email="asha.verma@acme.example")
+    # Two requests at once: both pass the check, the database's unique index stops the second.
+    monkeypatch.setattr(service, "_check_email_free", lambda *args: None)
+    response = admin_client.post(API, json=NEW_EMPLOYEE)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conflict"
+    assert db.query(Employee).count() == 1
+
+
 def test_future_joiner_has_salary_from_first_entry(admin_client):
     body = admin_client.post(API, json={**NEW_EMPLOYEE, "hire_date": "2026-12-01"}).json()
     assert body["salary_effective_date"] == "2026-12-01"
@@ -298,8 +349,37 @@ def test_viewers_can_read(viewer_client, make_employee):
 # ---------- edit, leave, reactivate ----------
 def test_edit_changes_only_sent_fields_and_bumps_version(admin_client, make_employee):
     e = make_employee(city="Austin")
-    body = admin_client.patch(f"{API}/{e.id}", json={"version": 1, "job_level": 4}).json()
-    assert (body["job_level"], body["city"], body["version"]) == (4, "Austin", 2)
+    body = admin_client.patch(
+        f"{API}/{e.id}", json={"version": 1, "job_level": 4, "country_code": "CA"}
+    ).json()
+    assert (body["job_level"], body["country_code"], body["city"], body["version"]) == (
+        4, "CA", "Austin", 2,
+    )  # fmt: skip
+
+
+def test_edit_with_nothing_to_change_keeps_the_version(admin_client, make_employee):
+    e = make_employee()
+    assert admin_client.patch(f"{API}/{e.id}", json={"version": 1}).json()["version"] == 1
+
+
+def test_edit_racing_another_save_returns_409(
+    admin_client, make_employee, session_factory, db, monkeypatch
+):
+    e = make_employee()
+    real_bump = service.cache.bump_data_version
+
+    def someone_saves_first(session):
+        with session_factory() as other:
+            other.get(Employee, e.id).city = "Theirs"
+            other.commit()
+        real_bump(session)
+
+    monkeypatch.setattr(service.cache, "bump_data_version", someone_saves_first)
+    response = admin_client.patch(f"{API}/{e.id}", json={"version": 1, "city": "Mine"})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "version_conflict"
+    db.refresh(e)
+    assert e.city == "Theirs"
 
 
 def test_stale_edit_returns_409_and_changes_nothing(admin_client, make_employee, db):
@@ -319,6 +399,7 @@ def test_edit_validation(admin_client, make_employee):
         ({"version": 1, "email": "TAKEN@acme.example"}, 409),
         ({"version": 1, "first_name": None}, 422),
         ({"version": 1, "department_id": 999}, 422),
+        ({"version": 1, "country_code": "FR"}, 422),  # not a country the app uses
         ({"version": 1, "hire_date": "2023-01-01"}, 422),  # after the first salary entry
         ({"city": "x"}, 422),  # version is required
     ]
@@ -380,11 +461,12 @@ def test_export_csv_uses_filters_and_leaves_out_gender(admin_client, make_employ
 
 
 def test_export_blocks_spreadsheet_formulas(admin_client, make_employee):
-    make_employee(first_name="=HYPERLINK(1)", last_name="+cmd", city="-1+1")
+    make_employee(first_name="=HYPERLINK(1)", last_name="+cmd", city="-1+1", job_title="-12.5")
     row = next(csv.DictReader(io.StringIO(admin_client.get(f"{API}/export.csv").text)))
     assert row["first_name"] == "'=HYPERLINK(1)"
     assert row["last_name"] == "'+cmd"
     assert row["city"] == "'-1+1"
+    assert row["job_title"] == "-12.5"  # a plain number is not a formula and stays as it is
 
 
 def test_meta_lists_reference_data(admin_client, make_employee):

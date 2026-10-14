@@ -27,6 +27,7 @@ from app.core.storage import LocalStorage
 from app.models import (
     EMPLOYMENT_TYPES,
     GENDERS,
+    OPEN_IMPORT_STATUSES,
     Country,
     Department,
     Employee,
@@ -37,12 +38,11 @@ from app.models import (
 )
 from app.schemas import ImportJobOut, ImportRowOut, Page
 from app.services import fx
-from app.services.employees import MAX_FUTURE, apply_salary_record
+from app.services.employees import MAX_FUTURE, apply_salary_record, safe_cell
 from app.services.import_file import COLUMNS, file_kind, read_rows
 
 log = logging.getLogger(__name__)
 
-ACTIVE_STATUSES = ("queued", "validating", "validated", "commit_queued", "committing")
 CHUNK = 500
 # Longer than any single step without a heartbeat (applying the largest file allowed).
 STUCK_AFTER = timedelta(minutes=15)
@@ -131,7 +131,8 @@ def errors_csv(db: Session, job_id: str) -> str:
     for row in rows:
         raw = row.payload.get("raw", {})
         problems = "; ".join(f"{e['field']}: {e['message']}" for e in row.errors)
-        writer.writerow([row.row_number, *(raw.get(c, "") for c in COLUMNS), problems])
+        cells = [row.row_number, *(raw.get(c, "") for c in COLUMNS), problems]
+        writer.writerow(safe_cell(v) for v in cells)
     return buffer.getvalue()
 
 
@@ -140,7 +141,7 @@ def start(
     db: Session, storage: LocalStorage, user: User, file_name: str | None, data: bytes
 ) -> ImportJobOut:
     kind = file_kind(file_name, data)
-    running = db.scalar(select(ImportJob).where(ImportJob.status.in_(ACTIVE_STATUSES)))
+    running = db.scalar(select(ImportJob).where(ImportJob.status.in_(OPEN_IMPORT_STATUSES)))
     if running is not None:
         raise Conflict(
             f"Another import ({running.filename}) is still open. Apply or cancel it first.",

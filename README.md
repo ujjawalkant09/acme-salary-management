@@ -46,6 +46,7 @@ From GitHub: **Actions > Deploy > Run workflow** runs every check and releases `
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest
 cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build
 ```
+Coverage reports: `cd backend && uv run --with pytest-cov pytest --cov=app --cov=scripts --cov-report=term-missing` and `cd frontend && npm run coverage`.
 CI (`.github/workflows/ci.yml`) runs these on every push, plus the deploy-script tests, a secret scan and the production image against Postgres.
 
 **As-user oracles** (`e2e/`): real-browser checks of the running app (sign-in, People, salary changes including a retried save and two admins at once), each scenario GREEN, RED or SKIP. CI runs them against the production image. To run them locally, see [e2e/README.md](e2e/README.md):

@@ -1,7 +1,7 @@
 import csv
 import io
 import uuid
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -9,6 +9,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.core.clock import as_utc
 from app.models import Employee, ImportJob, SalaryRecord
+from app.services import import_file
 from app.services import imports as service
 from app.services.import_file import COLUMNS, template_xlsx
 from app.worker.tasks import process_next_job
@@ -36,6 +37,15 @@ def csv_file(*rows: dict) -> bytes:
     writer.writeheader()
     writer.writerows(rows)
     return out.getvalue().encode()
+
+
+def xlsx_file(*rows: list) -> bytes:
+    workbook = Workbook()
+    for values in rows:
+        workbook.active.append(values)
+    out = io.BytesIO()
+    workbook.save(out)
+    return out.getvalue()
 
 
 def start(client, data: bytes, name="people.csv", key=None):
@@ -135,11 +145,52 @@ def test_email_owned_by_someone_else(ctx, make_employee):
     assert errors == [{"field": "email", "message": "Already used by another employee"}]
 
 
+@pytest.mark.parametrize(
+    ("values", "error"),
+    [
+        ({"first_name": "x" * 101}, {"field": "first_name", "message": "At most 100 characters"}),
+        ({"currency": "EUR"}, {"field": "currency", "message": "Not a supported currency"}),
+        ({"salary": "Infinity"}, {"field": "salary", "message": "Must be a number"}),
+    ],
+)
+def test_too_long_text_and_unknown_currency(ctx, values, error):
+    action, _, errors = service.check_row(row(**values), ctx())
+    assert (action, errors) == ("error", [error])
+
+
+def test_no_salary_change_for_someone_who_has_left(ctx, make_employee, db):
+    e = make_employee(country_code="IN", salary="1840000", email="asha@acme.example",
+                      first_name="Asha", last_name="Verma", city="Pune", hire_date="2025-04-01")  # fmt: skip
+    e.status = "left"
+    db.commit()
+    same = row(employee_code=e.employee_code)
+    assert service.check_row(same, ctx())[0] == "unchanged"
+    _, _, errors = service.check_row({**same, "salary": "2000000"}, ctx())
+    assert errors == [
+        {"field": "salary", "message": "This employee has left; salary changes aren't allowed"}
+    ]
+
+
 def test_dates_must_be_sensible(ctx):
     _, _, errors = service.check_row(row(salary_effective_date="2024-01-01"), ctx())
     assert errors[0]["field"] == "salary_effective_date"
     _, _, errors = service.check_row(row(hire_date="2028-01-01"), ctx())
     assert {e["field"] for e in errors} == {"hire_date", "salary_effective_date"}
+
+
+@pytest.mark.parametrize(
+    ("cell", "text"),
+    [
+        (None, ""),
+        (datetime(2025, 4, 1, 0, 0), "2025-04-01"),
+        (date(2025, 4, 1), "2025-04-01"),
+        (3.0, "3"),  # Excel keeps whole numbers as floats
+        (0.5, "0.5"),
+        ("  Pune ", "Pune"),
+    ],
+)
+def test_spreadsheet_cells_are_read_as_text(cell, text):
+    assert import_file._cell(cell) == text
 
 
 def test_template_has_columns_example_and_help():
@@ -235,6 +286,27 @@ def test_only_one_import_at_a_time_and_cancel(admin_client, session_factory, sto
     assert start(admin_client, csv_file(row(employee_code="ACM-2"))).status_code == 202
 
 
+def test_problem_report_blocks_spreadsheet_formulas(admin_client, session_factory, storage):
+    bad = row(first_name='=HYPERLINK("http://evil.example","x")', city="@SUM(1)", salary="-5")
+    job_id = start(admin_client, csv_file(bad)).json()["id"]
+    run_worker(session_factory, storage)
+    report = next(csv.DictReader(io.StringIO(admin_client.get(f"{API}/{job_id}/errors.csv").text)))
+    assert report["first_name"] == '\'=HYPERLINK("http://evil.example","x")'
+    assert report["city"] == "'@SUM(1)"
+    assert report["salary"] == "-5"  # a plain number stays as it is
+
+
+def test_two_uploads_at_once_still_open_only_one_import(admin_client, storage, db, monkeypatch):
+    """The database refuses a second open import even when both requests pass the check."""
+    monkeypatch.setattr(service, "OPEN_IMPORT_STATUSES", ())  # both requests see no open import
+    assert start(admin_client, csv_file(row())).status_code == 202
+    files_before = set(storage.root.glob("imports/*"))
+    second = start(admin_client, csv_file(row(employee_code="ACM-2")))
+    assert second.status_code == 409
+    assert db.query(ImportJob).count() == 1
+    assert set(storage.root.glob("imports/*")) == files_before  # the refused file is removed
+
+
 def test_same_upload_twice_starts_one_job(admin_client, db):
     key = str(uuid.uuid4())
     first, second = (
@@ -318,6 +390,25 @@ def test_code_or_email_taken_after_the_check(
     assert db.query(Employee).filter_by(employee_code="ACM-100003").count() == 1
 
 
+def test_new_email_taken_after_the_check(admin_client, make_employee, session_factory, storage, db):
+    e = make_employee(email="x@acme.example", first_name="X", last_name="Y", country_code="IN",
+                      salary="1000000", hire_date="2024-01-01")  # fmt: skip
+    data = csv_file(row(employee_code=e.employee_code, email="new@acme.example", first_name="X",
+                        last_name="Y", hire_date="2024-01-01", salary="1000000"))  # fmt: skip
+    job_id = start(admin_client, data).json()["id"]
+    run_worker(session_factory, storage)
+    make_employee(email="new@acme.example")  # someone takes the address while it waits for review
+
+    admin_client.post(f"{API}/{job_id}/commit", json={"mode": "valid_rows_only"})
+    run_worker(session_factory, storage)
+    errors = admin_client.get(f"{API}/{job_id}/rows", params={"action": "error"}).json()
+    assert errors["items"][0]["errors"] == [
+        {"field": "email", "message": "Taken by another employee after the check"}
+    ]
+    db.expire_all()
+    assert db.get(Employee, e.id).email == "x@acme.example"
+
+
 def test_code_taken_after_the_check_stops_all_or_nothing(
     admin_client, make_employee, session_factory, storage, db
 ):
@@ -362,6 +453,7 @@ def test_failure_in_the_middle_of_apply_saves_nothing(
     [
         ("people.csv", b"first_name\nAsha\n", "Missing columns"),
         ("people.csv", HEADER.encode() + b"\n", "no data rows"),
+        ("people.xlsx", xlsx_file(), "The file is empty"),
     ],
 )
 def test_bad_files_fail_with_a_clear_message(
@@ -389,6 +481,8 @@ def test_row_limit(admin_client, session_factory, storage, monkeypatch):
         ("macro.xlsm", b"PK\x03\x04..."),
         ("binary.csv", b"\x00\x01\x02\xff\xfe"),
         ("old.xls", b"\xd0\xcf"),
+        ("renamed.xlsx", b"PK\x03\x04 xl/vbaProject.bin"),
+        ("nul.csv", b"employee_code\x00\n"),
     ],
 )
 def test_wrong_file_types_are_refused_at_upload(admin_client, name, data):
@@ -396,32 +490,35 @@ def test_wrong_file_types_are_refused_at_upload(admin_client, name, data):
 
 
 def test_xlsx_files_are_read(admin_client, session_factory, storage):
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.append(COLUMNS)
-    sheet.append([row()[c] for c in COLUMNS])
-    out = io.BytesIO()
-    workbook.save(out)
-    job_id = start(admin_client, out.getvalue(), name="people.xlsx").json()["id"]
+    # Excel hands back dates as datetimes and whole numbers as floats.
+    typed = {**row(), "job_level": 3.0, "salary": 1840000.0, "hire_date": datetime(2025, 4, 1),
+             "salary_effective_date": date(2025, 4, 1)}  # fmt: skip
+    data = xlsx_file(COLUMNS, [typed[c] for c in COLUMNS])
+    job_id = start(admin_client, data, name="people.xlsx").json()["id"]
     run_worker(session_factory, storage)
     assert admin_client.get(f"{API}/{job_id}").json()["create_count"] == 1
+    salary = admin_client.get(f"{API}/{job_id}/rows").json()["items"][0]["payload"]["salary"]
+    assert (salary["amount"], salary["effective_date"]) == ("1840000.00", "2025-04-01")
 
 
-def test_interrupted_jobs_are_requeued(db, admin, frozen_clock):
-    quiet = frozen_clock.current - timedelta(minutes=16)
-    db.add_all([
-        ImportJob(id="a", filename="a.csv", file_sha256="1", status="validating", created_by=admin.id,
-                  heartbeat_at=quiet),
-        ImportJob(id="b", filename="b.csv", file_sha256="2", status="committing", created_by=admin.id),
-        # Another worker is still on this one.
-        ImportJob(id="c", filename="c.csv", file_sha256="3", status="committing", created_by=admin.id,
-                  heartbeat_at=frozen_clock.current - timedelta(minutes=1)),
-    ])  # fmt: skip
+@pytest.mark.parametrize(
+    ("status", "quiet_minutes", "expected"),
+    [
+        ("validating", 16, "queued"),
+        ("committing", None, "commit_queued"),  # no heartbeat at all
+        ("committing", 1, "committing"),  # another worker is still on this one
+    ],
+)
+def test_interrupted_jobs_are_requeued(db, admin, frozen_clock, status, quiet_minutes, expected):
+    heartbeat = (
+        None if quiet_minutes is None else frozen_clock.current - timedelta(minutes=quiet_minutes)
+    )
+    db.add(ImportJob(id="a", filename="a.csv", file_sha256="1", status=status,
+                     created_by=admin.id, heartbeat_at=heartbeat))  # fmt: skip
     db.commit()
     service.reset_stuck_jobs(db)
     service.reset_stuck_jobs(db)  # safe to re-run
-    statuses = [db.get(ImportJob, i).status for i in ("a", "b", "c")]
-    assert statuses == ["queued", "commit_queued", "committing"]
+    assert db.get(ImportJob, "a").status == expected
 
 
 def test_claiming_and_checking_keep_the_heartbeat_fresh(

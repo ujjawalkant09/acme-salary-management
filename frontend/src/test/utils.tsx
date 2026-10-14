@@ -5,6 +5,7 @@ import type { ReactElement } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { vi } from 'vitest'
 
+import { UserContext } from '@/lib/auth'
 import { ME_KEY } from '@/lib/queryClient'
 import { LocationProbe } from '@/test/LocationProbe'
 import type { Meta, User } from '@/lib/types'
@@ -32,8 +33,10 @@ export const META: Meta = {
 
 type Handler = (url: URL, init: RequestInit) => { status?: number; body?: unknown }
 
+export type ApiRoutes = Record<string, Handler | object>
+
 /** Replaces fetch. `routes` maps "METHOD /path" (no query string) to a response. */
-export function mockApi(routes: Record<string, Handler | object>) {
+export function mockApi(routes: ApiRoutes) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(String(input), 'http://localhost')
     const key = `${init.method ?? 'GET'} ${url.pathname.replace('/api/v1', '')}`
@@ -46,7 +49,8 @@ export function mockApi(routes: Record<string, Handler | object>) {
   return fetchMock
 }
 
-export function renderApp(ui: ReactElement, { user = ADMIN, route = '/', path = '*' } = {}) {
+/** `user: null` renders as signed out. */
+export function renderApp(ui: ReactElement, { user = ADMIN as User | null, route = '/', path = '*' } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   client.setQueryData(ME_KEY, user)
   client.setQueryData(['meta'], META)
@@ -55,9 +59,11 @@ export function renderApp(ui: ReactElement, { user = ADMIN, route = '/', path = 
     ...render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={[route]}>
-          <Routes>
-            <Route path={path} element={ui} />
-          </Routes>
+          <UserContext value={user}>
+            <Routes>
+              <Route path={path} element={ui} />
+            </Routes>
+          </UserContext>
           <LocationProbe />
         </MemoryRouter>
       </QueryClientProvider>,

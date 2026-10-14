@@ -3,7 +3,7 @@ import { Navigate, Route, Routes } from 'react-router'
 
 import { AppShell } from '@/components/AppShell'
 import { PageLoading } from '@/components/states'
-import { useMe } from '@/lib/auth'
+import { useMe, UserContext } from '@/lib/auth'
 import LoginPage from '@/pages/LoginPage'
 
 // Each page is its own chunk; the sign-in page is in the main bundle because it shows first.
@@ -32,17 +32,19 @@ export default function App() {
   if (!user) return <LoginPage />
 
   return (
-    <AppShell>
-      <Suspense fallback={<PageLoading />}>
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/people" element={<PeoplePage />} />
-          <Route path="/people/:id" element={<EmployeePage />} />
-          <Route path="/insights" element={<InsightsPage />} />
-          <Route path="/imports" element={<ImportsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
-    </AppShell>
+    <UserContext value={user}>
+      <AppShell>
+        <Suspense fallback={<PageLoading />}>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/people" element={<PeoplePage />} />
+            <Route path="/people/:id" element={<EmployeePage />} />
+            <Route path="/insights" element={<InsightsPage />} />
+            <Route path="/imports" element={<ImportsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+      </AppShell>
+    </UserContext>
   )
 }

@@ -21,3 +21,4 @@ dist/
 *.docx
 ~$*.docx
 storage/
+coverage/

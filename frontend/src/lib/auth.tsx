@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { createContext, useContext } from 'react'
 
 import { api, ApiError } from '@/lib/api'
 import { ME_KEY } from '@/lib/queryClient'
@@ -13,16 +14,20 @@ async function fetchMe(): Promise<User | null> {
   }
 }
 
-/** The signed-in user, `null` when signed out, `undefined` while loading. */
+/** The signed-in user, `null` when signed out, `undefined` while loading. Only App reads it. */
 export function useMe() {
   return useQuery({ queryKey: ME_KEY, queryFn: fetchMe, staleTime: Infinity })
 }
 
+// App hands the user to the signed-in app through context instead of every component reading
+// `useMe`: on sign-out, App switches to the sign-in page before anything inside sees no user.
+export const UserContext = createContext<User | null>(null)
+
 /** For components inside the signed-in app shell, where the user is always known. */
 export function useUser(): User {
-  const { data } = useMe()
-  if (!data) throw new Error('useUser must be used inside the signed-in app')
-  return data
+  const user = useContext(UserContext)
+  if (!user) throw new Error('useUser must be used inside the signed-in app')
+  return user
 }
 
 export function useIsAdmin(): boolean {
@@ -43,8 +48,11 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => api<void>('/auth/logout', { method: 'POST' }),
     onSettled: () => {
-      client.clear()
+      // Set on the query App is watching (clearing the cache first would detach App from it),
+      // then forget everything else this session loaded.
       client.setQueryData(ME_KEY, null)
+      client.removeQueries({ predicate: (query) => query.queryKey[0] !== ME_KEY[0] })
+      client.getMutationCache().clear()
     },
   })
 }

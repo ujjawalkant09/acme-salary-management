@@ -17,5 +17,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    coverage: {
+      include: ['src/**'],
+      // shadcn/ui primitives are vendored library code; main.tsx only mounts the app.
+      exclude: ['src/components/ui/**', 'src/test/**', 'src/main.tsx', '**/*.test.*'],
+    },
   },
 })

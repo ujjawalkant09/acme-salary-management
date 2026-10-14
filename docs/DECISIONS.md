@@ -142,3 +142,12 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Selectors are roles, labels and visible text; a `data-testid` only where text is fragile (`current-salary`) | Tests what a person sees and stays readable; no test ids sprinkled everywhere |
 | The browser runs in UTC | The salary form dates "today" from the browser's clock and the server uses UTC; in India between 00:00 and 05:30 a local "today" is the server's tomorrow and would be saved as an upcoming change |
 | Each role signs in once per run and later scenarios reuse its cookie | One full run signs in 4 times, under the 5-a-minute limit, so it also works against the rate-limited demo |
+
+## Test and security review (15 Oct 2026)
+| Decision | Why |
+|---|---|
+| "One open import at a time" is also a partial unique index (`uq_import_jobs_one_open`); the service's check stays for the friendly message, and two uploads at the same moment get the generic `409` | The check alone let two simultaneous uploads both through |
+| The problem-rows CSV (`errors.csv`) escapes formulas the same way as the employee export | It writes back cells exactly as uploaded, so a file from someone else could put a live formula in front of an HR Admin |
+| Only `App` reads `/auth/me`; it hands the signed-in user to the app through React context (`useUser`) | With every component reading the query, signing out re-rendered the user menu before `App` switched to sign-in, and the page went blank |
+| Frontend coverage with `@vitest/coverage-v8` (`npm run coverage`), leaving out the vendored shadcn/ui files; backend coverage with `pytest-cov` on demand (`uv run --with pytest-cov`) | Shows untested code without adding a backend dependency |
+| Kept as they are: login is limited per IP (5 a minute) and not per account; uvicorn trusts forwarded headers from any address | bcrypt keeps guessing slow; only Caddy can reach the app, and Caddy replaces `X-Forwarded-For`. Revisit if port 8000 is ever exposed |

@@ -26,6 +26,15 @@ describe('query client', () => {
     expect(toast.error).toHaveBeenCalledWith('This employee was changed by someone else. Reload to see the latest.')
   })
 
+  it('a change refused because the session expired signs out instead of toasting', async () => {
+    vi.mocked(toast.error).mockClear()
+    const client = createQueryClient()
+    client.setQueryData(ME_KEY, { id: 1 })
+    await client.getMutationCache().build(client, { mutationFn: fail(new ApiError(401, 'unauthorized', 'Please sign in.')) }).execute(undefined).catch(() => {})
+    expect(client.getQueryData(ME_KEY)).toBeNull()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
   it('does not retry client errors', async () => {
     const client = createQueryClient()
     const queryFn = vi.fn(fail(new ApiError(404, 'not_found', 'Not found.')))
