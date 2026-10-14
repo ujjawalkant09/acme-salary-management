@@ -14,7 +14,7 @@ UBUNTU_AMI_PARAM=/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64
 
 apply_stack() {
   local plan=$1
-  local params=("AlertEmail=$ALERT_EMAIL" "BudgetUsd=$BUDGET_USD" "GitHubRepo=${GITHUB_REPO:-}")
+  local params=("AlertEmail=$ALERT_EMAIL" "BudgetUsd=$BUDGET_USD" "GitHubSubjectPrefix=${GITHUB_OIDC_SUBJECT_PREFIX:-}")
   # The server image is looked up once, when the stack is first created. Later runs keep it:
   # a new image id would make CloudFormation replace the server and lose its disk.
   if ! stack_exists; then

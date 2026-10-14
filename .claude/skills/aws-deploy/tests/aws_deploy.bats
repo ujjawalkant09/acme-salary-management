@@ -186,6 +186,19 @@ line_of() {
 
 # --- deploy ---
 
+@test "deploy: the GitHub OIDC subject from config.env goes to the stack (empty = no GitHub access)" {
+  echo "GITHUB_OIDC_SUBJECT_PREFIX=repo:owner@1/repo@2" >>"$CONFIG_FILE"
+  in_deploy "apply_stack apply"
+  [ "$status" -eq 0 ]
+  grep -q "GitHubSubjectPrefix=repo:owner@1/repo@2" "$STUB_LOG"
+}
+
+@test "deploy: without a GitHub subject the stack gets an empty one" {
+  in_deploy "apply_stack apply"
+  [ "$status" -eq 0 ]
+  grep -qE "GitHubSubjectPrefix=( |$)" "$STUB_LOG"
+}
+
 @test "deploy: an unknown option is rejected" {
   run "$SKILL/scripts/deploy.sh" --force
   [ "$status" -eq 1 ]

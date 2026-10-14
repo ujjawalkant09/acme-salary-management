@@ -12,14 +12,17 @@ Parameters:
     Type: Number
     MinValue: 1
     Description: Monthly cost (USD) that triggers the budget alert email.
-  GitHubRepo:
+  GitHubSubjectPrefix:
     Type: String
     Default: ""
-    AllowedPattern: "^$|^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
-    Description: owner/repo allowed to release through the GitHub Deploy button. Empty = no GitHub access.
+    AllowedPattern: "^$|^repo:[^:*\\s]+$"
+    Description: >-
+      The repo's OIDC subject prefix, allowed to release through the GitHub Deploy button
+      (gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix).
+      Empty = no GitHub access.
 
 Conditions:
-  HasGitHubRepo: !Not [!Equals [!Ref GitHubRepo, ""]]
+  HasGitHubRepo: !Not [!Equals [!Ref GitHubSubjectPrefix, ""]]
 
 Resources:
   Vpc:
@@ -256,8 +259,9 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                # Only jobs in this repo that run in the "production" environment.
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:production
+                # Only jobs in this repo that run in the "production" environment. The prefix holds the
+                # owner and repo IDs, so a renamed or re-created repo with the same name can't match.
+                token.actions.githubusercontent.com:sub: !Sub ${GitHubSubjectPrefix}:environment:production
       Policies:
         - PolicyName: release
           PolicyDocument:
