@@ -6,7 +6,7 @@ Each file in `features/` is one oracle with numbered scenarios. Next to it is a 
 
 | Oracle | Scenarios |
 |---|---|
-| [login](features/login.md) | admin signs in · wrong password · the viewer can't change anything |
+| [login](features/login.md) | admin signs in · wrong password · the viewer can't change anything · sign out |
 | [people](features/people.md) | list and paging · search by code · empty state and Clear · open a person and come back |
 | [salary](features/salary.md) | change a salary · lost answer + Save again saves once (idempotency) · two admins at once (409) · invalid amounts |
 
@@ -20,6 +20,8 @@ Before any scenario runs, two gates stop a RED the app isn't to blame for:
 - **Login gate.** Both demo passwords must be known: `DEMO_ADMIN_PASSWORD` / `DEMO_VIEWER_PASSWORD` from the environment, otherwise from `backend/.env` (with quotes stripped).
 
 ## Run them
+The quickest way is the Claude skill [`as-user-oracles`](../.claude/skills/as-user-oracles/SKILL.md). Its `scripts/app.sh start` starts a throwaway app (its own database, secrets and passwords), `app.sh run` runs every oracle on it, and `app.sh probe <page>` shows what's on a page while you write a scenario. It works without Claude too. The manual steps follow.
+
 One-time setup:
 ```bash
 cd e2e
