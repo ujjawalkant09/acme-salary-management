@@ -34,6 +34,7 @@ npm run dev
 
 ## Deploy to AWS
 One command builds the image and deploys everything (one EC2 server, Postgres, HTTPS) to https://acme.docrelay.in. The demo server is off when unused to save money. Setup, commands and costs: [.claude/skills/aws-deploy/SKILL.md](.claude/skills/aws-deploy/SKILL.md).
+From GitHub: **Actions > Deploy > Run workflow** runs every check and releases `main` (it turns the server on if it is off).
 ```bash
 .claude/skills/aws-deploy/scripts/deploy.sh          # create or update everything, release the current commit
 .claude/skills/aws-deploy/scripts/server.sh start    # turn the demo on (stops itself after 4 hours)
@@ -45,3 +46,4 @@ One command builds the image and deploys everything (one EC2 server, Postgres, H
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest
 cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build
 ```
+CI (`.github/workflows/ci.yml`) runs these on every push, plus the deploy-script tests, a secret scan and the production image against Postgres.

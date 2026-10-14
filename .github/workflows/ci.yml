@@ -1,0 +1,105 @@
+# Checks on every push and pull request; the Deploy workflow runs the same checks first.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build
+
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: .claude/skills/aws-deploy } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx --from shellcheck-py shellcheck scripts/*.sh server/*.sh tests/stubs/*
+      - run: uvx cfn-lint infra/stack.yml
+      - run: npx --yes bats@1.11.1 tests
+
+  # Fails if any commit adds a key or password. Known test-only values are in .gitleaksignore.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      # Same user as the checkout, so git inside the container trusts the folder.
+      - run: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 git /repo --no-banner --redact
+
+  # The unit tests use SQLite. This runs the real image against Postgres, the way the server does.
+  image-on-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: acme, POSTGRES_PASSWORD: acme, POSTGRES_DB: acme }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U acme" --health-interval 2s --health-retries 20
+    env:
+      RUN: >-
+        docker run --rm --network host
+        -e DATABASE_URL=postgresql+psycopg://acme:acme@localhost:5432/acme
+        -e SECRET_KEY=ci-only-secret-key-0123456789
+        -e SESSION_COOKIE_SECURE=false
+        -e DEMO_ADMIN_PASSWORD=ci-admin-password
+        -e DEMO_VIEWER_PASSWORD=ci-viewer-password
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t acme:ci .
+      - name: Migrate and seed twice (the second run must change nothing)
+        run: |
+          $RUN acme:ci alembic upgrade head
+          $RUN acme:ci python -m scripts.seed --count 1000 --if-empty
+          second=$($RUN acme:ci python -m scripts.seed --count 1000 --if-empty)
+          grep -q "nothing seeded" <<<"$second"
+      - name: Start the app and the worker
+        run: |
+          ${RUN/--rm/-d --name app} acme:ci
+          ${RUN/--rm/-d --name worker} acme:ci python -m app.worker
+          for i in $(seq 1 30); do curl -fsS localhost:8000/api/v1/health && break; sleep 2; done
+      - name: Health, UI, login and a worker that stays up
+        run: |
+          grep -q '"ok"' <<<"$(curl -fsS localhost:8000/api/v1/health)"
+          grep -qi "<html" <<<"$(curl -fsS localhost:8000/)"
+          login=$(curl -fsS -c jar -H 'Content-Type: application/json' \
+            -d '{"email":"priya.sharma@acme.example","password":"ci-admin-password"}' \
+            localhost:8000/api/v1/auth/login)
+          grep -q hr_admin <<<"$login"
+          grep -q ACM- <<<"$(curl -fsS -b jar 'localhost:8000/api/v1/employees?page_size=1')"
+          sleep 5
+          [ "$(docker inspect -f '{{.State.Running}}' worker)" = true ]
+          if docker logs worker 2>&1 | grep -q Traceback; then echo "worker crashed"; exit 1; fi
+      - if: failure()
+        run: docker logs app; docker logs worker

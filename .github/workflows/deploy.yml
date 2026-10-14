@@ -1,0 +1,58 @@
+# The Deploy button: Actions > Deploy > Run workflow. Runs every CI check, then releases the
+# commit to https://acme.docrelay.in. It starts the server if it is off; the server backs up
+# and stops itself after the chosen hours.
+#
+# AWS access is a short-lived OIDC role (no keys in GitHub) that can only release: it cannot
+# change the infrastructure, IAM or secrets. Those changes run from the author's laptop.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: Hours until the server backs up and stops itself (0 = never)
+        default: "4"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: checks
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    environment:
+      name: production
+      url: https://acme.docrelay.in
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the hours
+        env: { HOURS: "${{ inputs.hours }}" }
+        run: '[[ "$HOURS" =~ ^[0-9]+$ ]] || { echo "hours must be a whole number"; exit 1; }'
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - uses: docker/setup-buildx-action@v3
+      - name: Install dig
+        run: command -v dig || (sudo apt-get update -q && sudo apt-get install -yq dnsutils)
+      - name: Write the deploy settings (nothing secret)
+        env:
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          HOURS: ${{ inputs.hours }}
+        run: |
+          printf '%s\n' AWS_REGION=ap-south-1 STACK_NAME=acme-salary DOMAIN=acme.docrelay.in \
+            "ALERT_EMAIL=$ALERT_EMAIL" BUDGET_USD=10 "AUTO_STOP_HOURS=$HOURS" \
+            > .claude/skills/aws-deploy/config.env
+      - name: Release
+        run: .claude/skills/aws-deploy/scripts/deploy.sh --release
