@@ -106,7 +106,10 @@ Resources:
       ImageScanningConfiguration: { ScanOnPush: true }
       LifecyclePolicy:
         LifecyclePolicyText: |
-          {"rules": [{"rulePriority": 1, "description": "Keep the last 10 images",
+          {"rules": [{"rulePriority": 1, "description": "Drop replaced build caches after a day",
+            "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 1},
+            "action": {"type": "expire"}},
+           {"rulePriority": 2, "description": "Keep the last 10 images",
             "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10},
             "action": {"type": "expire"}}]}
 

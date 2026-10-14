@@ -77,7 +77,15 @@ jobs:
         -e DEMO_VIEWER_PASSWORD=ci-viewer-password
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t acme:ci .
+      - uses: docker/setup-buildx-action@v3
+      # Layers are cached between runs, so only what changed is rebuilt.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: acme:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Migrate and seed twice (the second run must change nothing)
         run: |
           $RUN acme:ci alembic upgrade head
