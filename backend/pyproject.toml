@@ -1,0 +1,47 @@
+[project]
+name = "acme-pay"
+version = "0.1.0"
+description = "ACME Pay: salary management API"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "bcrypt>=5.0.0",
+    "cachetools>=7.2.1",
+    "fastapi>=0.143.1",
+    "httpx>=0.28.1",
+    "itsdangerous>=2.2.0",
+    "openpyxl>=3.1.5",
+    "pillow>=12.3.0",
+    "pydantic-settings>=2.16.0",
+    "pydantic[email]>=2.14.1",
+    "python-multipart>=0.0.32",
+    "slowapi>=0.1.10",
+    "sqlalchemy>=2",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["alembic"]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*" = ["E501", "UP", "I"]
+# Long one-line assertions read better in tests than wrapped ones.
+"tests/*" = ["E501"]

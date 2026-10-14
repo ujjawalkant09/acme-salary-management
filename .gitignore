@@ -18,3 +18,4 @@ dist/
 # The hiring team's brief and other Word files stay out of the public repo
 *.docx
 ~$*.docx
+storage/
