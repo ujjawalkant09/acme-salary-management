@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import httpx
+import pytest
 from sqlalchemy import delete, select
 
 from app.core import cache
@@ -57,6 +58,27 @@ async def test_failed_fetch_keeps_last_good_rates(db, make_employee):
     await db.refresh(e)
     assert e.current_salary_usd == Decimal("12000.00")
     assert (await db.get(AppState, 1)).fx_checked_on is None  # tries again on the next run
+
+
+async def test_failure_mid_refresh_saves_nothing(db, make_employee, monkeypatch):
+    """Force an error after rates and USD salaries are written: the whole refresh rolls back."""
+    e = await make_employee(country_code="IN", salary="1000000")
+    version_before = await cache.get_data_version(db)
+
+    async def boom(_db):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(fx.cache, "bump_data_version", boom)
+    with pytest.raises(RuntimeError):
+        await fx.refresh_daily_rates(db, fake_client(ecb_response(rate_date="2026-10-15")))
+    await db.rollback()
+
+    await db.refresh(e)
+    assert e.current_salary_usd == Decimal("12000.00")
+    assert await db.scalar(select(FxRate).filter_by(rate_date=date(2026, 10, 15))) is None
+    assert (await fx.rates_in_use(db)).rates_date == date(2026, 10, 14)
+    assert (await db.get(AppState, 1)).fx_checked_on is None  # tries again on the next run
+    assert await cache.get_data_version(db) == version_before
 
 
 async def test_garbage_response_is_a_failed_fetch(db):

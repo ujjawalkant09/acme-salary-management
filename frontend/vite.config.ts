@@ -21,6 +21,8 @@ export default defineConfig({
       include: ['src/**'],
       // shadcn/ui primitives are vendored library code; main.tsx only mounts the app.
       exclude: ['src/components/ui/**', 'src/test/**', 'src/main.tsx', '**/*.test.*'],
+      // `npm run coverage` (and CI) fails if coverage drops below these.
+      thresholds: { statements: 96, branches: 93, functions: 94, lines: 97 },
     },
   },
 })

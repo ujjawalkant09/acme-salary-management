@@ -183,8 +183,7 @@ async def salary_history(db: AsyncSession, employee_id: int) -> list[SalaryRecor
 
 async def recent_changes(db: AsyncSession, limit: int) -> list[RecentSalaryChange]:
     changes = []
-    for record in await repo.recent_salary_changes(db, limit):
-        employee = await db.get(Employee, record.employee_id)
+    for record, employee in await repo.recent_salary_changes(db, limit):
         changes.append(
             RecentSalaryChange(
                 id=record.id,

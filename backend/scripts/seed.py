@@ -50,13 +50,15 @@ FX_SNAPSHOT = {  # USD per unit
 
 # code: (currency, headcount weight, pay factor vs US, rounding step, cities)
 COUNTRIES = {
-    "IN": ("INR", 40, 0.25, 10_000, ["Bengaluru", "Hyderabad", "Pune", "Mumbai", "Gurugram"]),
-    "US": ("USD", 22, 1.00, 500, ["New York", "San Francisco", "Austin", "Seattle", "Chicago"]),
-    "CA": ("CAD", 10, 0.78, 500, ["Toronto", "Vancouver", "Montreal"]),
-    "SG": ("SGD", 8, 0.75, 500, ["Singapore"]),
-    "BR": ("BRL", 10, 0.30, 1_000, ["São Paulo", "Rio de Janeiro", "Belo Horizonte"]),
-    "AU": ("AUD", 10, 0.82, 500, ["Sydney", "Melbourne", "Brisbane"]),
-}
+    "IN": ("INR", 40, Decimal("0.25"), 10_000,
+           ["Bengaluru", "Hyderabad", "Pune", "Mumbai", "Gurugram"]),
+    "US": ("USD", 22, Decimal("1.00"), 500,
+           ["New York", "San Francisco", "Austin", "Seattle", "Chicago"]),
+    "CA": ("CAD", 10, Decimal("0.78"), 500, ["Toronto", "Vancouver", "Montreal"]),
+    "SG": ("SGD", 8, Decimal("0.75"), 500, ["Singapore"]),
+    "BR": ("BRL", 10, Decimal("0.30"), 1_000, ["São Paulo", "Rio de Janeiro", "Belo Horizonte"]),
+    "AU": ("AUD", 10, Decimal("0.82"), 500, ["Sydney", "Melbourne", "Brisbane"]),
+}  # fmt: skip
 
 # department: [(title, US yearly base at level 1, weight)]
 DEPARTMENTS = {
@@ -81,7 +83,7 @@ DEPARTMENT_WEIGHTS = {
     "Engineering": 35, "Product": 6, "Design": 4, "Sales": 14, "Marketing": 6,
     "Customer Support": 14, "Finance": 6, "People": 5, "Operations": 7, "Legal": 3,
 }  # fmt: skip
-LEVEL_FACTOR = [1.0, 1.25, 1.55, 1.9, 2.35, 2.9]
+LEVEL_FACTOR = [Decimal(f) for f in ("1.0", "1.25", "1.55", "1.9", "2.35", "2.9")]
 LEVEL_WEIGHTS = [22, 28, 24, 14, 8, 4]
 
 FIRST_NAMES = {
@@ -119,8 +121,8 @@ def _ascii(value: str) -> str:
     return plain.lower().replace(" ", "")
 
 
-def _round_to(amount: float, step: int) -> Decimal:
-    return (Decimal(amount) / step).quantize(Decimal(1), ROUND_HALF_UP) * step
+def _round_to(amount: Decimal, step: int) -> Decimal:
+    return (amount / step).quantize(Decimal(1), ROUND_HALF_UP) * step
 
 
 def _pick(rng: random.Random, weights: dict):
@@ -148,10 +150,11 @@ def generate(count: int, as_of: date, rng: random.Random) -> tuple[list[dict], l
         hire_date = first_hire + timedelta(days=rng.randrange(hire_span))
 
         # Full-time-equivalent USD pay for this role, level and country, with some noise.
-        usd = base * LEVEL_FACTOR[level - 1] * factor * rng.gauss(1, 0.06)
+        noise = Decimal(str(round(rng.gauss(1, 0.06), 4)))
+        usd = base * LEVEL_FACTOR[level - 1] * factor * noise
         if rng.random() < 0.006:  # a few deliberate outliers for the Insights page
-            usd *= rng.choice([0.55, 1.7])
-        final = _round_to(usd * float(fte) / float(FX_SNAPSHOT[currency]), step)
+            usd *= rng.choice([Decimal("0.55"), Decimal("1.7")])
+        final = _round_to(usd * fte / FX_SNAPSHOT[currency], step)
 
         left = rng.random() < 0.04
         left_on = None
@@ -172,7 +175,7 @@ def generate(count: int, as_of: date, rng: random.Random) -> tuple[list[dict], l
         raises = [Decimal(str(round(rng.uniform(1.03, 1.12), 3))) for _ in anniversaries]
         amounts = [final]
         for factor_up in reversed(raises):
-            amounts.insert(0, _round_to(float(amounts[0] / factor_up), step))
+            amounts.insert(0, _round_to(amounts[0] / factor_up, step))
         dates = [hire_date, *anniversaries]
         reasons = ["hire", *(rng.choice(["merit", "merit", "promotion", "market_adjustment"])
                              for _ in anniversaries)]  # fmt: skip
@@ -213,7 +216,7 @@ def generate(count: int, as_of: date, rng: random.Random) -> tuple[list[dict], l
         if not left and rng.random() < 0.01:
             starts = as_of + timedelta(days=rng.randrange(2, 30))
             records.append(
-                {"employee_id": number, "amount": _round_to(float(final) * 1.08, step),
+                {"employee_id": number, "amount": _round_to(final * Decimal("1.08"), step),
                  "currency": currency, "effective_date": starts, "reason": "promotion"}
             )  # fmt: skip
     return employees, records

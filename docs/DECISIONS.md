@@ -179,3 +179,11 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | The wake code lives one level below the app's secrets (`/acme-salary/wake/WAKE_CODE`) | The server reads only the top level into its settings, so the app never gets it |
 | The Lambda's code is uploaded by `deploy.sh` (`update-function-code`) after the stack; the stack holds a placeholder | Inline code in the template is capped at 4 KB and can't be tested as a file; a separate code bucket would have to exist before the stack that creates the bucket |
 | The certificate is requested by `deploy.sh`, which adds ACM's proof record in GoDaddy and waits, and is passed to the stack; the stack's wake address is off until it exists | CloudFormation can only finish DNS validation by itself in Route 53; the DNS is in GoDaddy |
+
+## Quality pass (15 Oct 2026)
+| Decision | Why |
+|---|---|
+| `pytest-cov` is now a dev dependency and CI runs `pytest --cov` and `npm run coverage`, failing below a floor (backend 98%; frontend statements 96, branches 93, functions 94, lines 97). Replaces "backend coverage on demand" from the test review | Coverage only helps if a drop is noticed; the floors sit just under today's numbers (backend 99.6%, frontend 97.5 / 94.6 / 95.5 / 98.5) |
+| Coverage traces greenlets (`concurrency = ["greenlet", "thread"]`) | Async SQLAlchemy switches greenlets; without this the same tests measured 91% and showed mark-left, edit and most of Insights as never run |
+| The seed script works out pay in `Decimal` too (pay factors, level factors, raises); only the random noise is drawn as a float and turned into a 4-place `Decimal` | "Money is never a float" now holds everywhere, seed included. The data is still the same for the same seed and date; totals moved by about 0.0005% |
+| "Recent salary changes" loads each entry's employee in the same query (a join) | It looked up each employee separately: 1 + N queries for N entries |

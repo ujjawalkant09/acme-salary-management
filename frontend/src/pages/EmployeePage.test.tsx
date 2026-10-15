@@ -120,10 +120,12 @@ describe('Employee page actions', () => {
     ['Change salary', 'Change salary'],
     ['Edit details', 'Edit details'],
     ['Mark as left', 'Mark Asha Verma as left?'],
-  ])('%s opens its dialog', async (button, title) => {
+  ])('%s opens its dialog and Cancel closes it', async (button, title) => {
     const { user } = show()
     await user.click(await screen.findByRole('button', { name: button }))
     expect(screen.getByRole('dialog')).toHaveAccessibleName(title)
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('someone who left can be made a current employee again', async () => {
@@ -143,6 +145,14 @@ describe('Employee page actions', () => {
     await screen.findByRole('button', { name: 'Upload photo' })
     await user.upload(screen.getByLabelText('Choose a photo'), new File(['png'], 'me.png', { type: 'image/png' }))
     await vi.waitFor(() => expect(sent(fetchMock, 'PUT')).toHaveLength(1))
+  })
+
+  it('the photo button opens the file picker', async () => {
+    const { user } = show()
+    const button = await screen.findByRole('button', { name: 'Upload photo' })
+    const picker = vi.spyOn(screen.getByLabelText('Choose a photo'), 'click')
+    await user.click(button)
+    expect(picker).toHaveBeenCalledOnce()
   })
 
   it('refuses a photo that is not an image', async () => {

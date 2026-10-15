@@ -24,7 +24,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run pytest
+      - run: uv run pytest --cov
 
   frontend:
     runs-on: ubuntu-latest
@@ -36,7 +36,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test -- --run
+      - run: npm run coverage
       - run: npm run build
 
   # The as-user oracle harness and its skill (the oracles run against the real app below).
