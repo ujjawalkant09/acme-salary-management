@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from app.core.config import get_settings
 from app.models import Department, Employee, FxRate, SalaryRecord, User
 from app.repositories import employees as repo
+from app.schemas import EmployeeFilters
 from scripts import seed as seed_script
 from tests.conftest import BACKEND
 
@@ -108,10 +109,9 @@ def test_seed_command_line(session_factory, monkeypatch, capsys):
         assert db.scalar(select(func.count()).select_from(Employee)) == 5
 
 
-# SQLite can't reflect the "one open import" expression index, so Alembic skips comparing it;
-# test_two_uploads_at_once_still_open_only_one_import checks that the migration created it.
-@pytest.mark.filterwarnings("ignore:.*expression-based index uq_import_jobs_one_open")
-@pytest.mark.filterwarnings("ignore:.*expression-based index 'uq_import_jobs_one_open'")
+# SQLite can't reflect expression indexes, so Alembic skips comparing them. The plan tests
+# below and test_two_uploads_at_once_still_open_only_one_import check the migrations made them.
+@pytest.mark.filterwarnings("ignore:.*expression-based index")
 def test_models_match_the_migration(template_db):
     """Fails if a model changed without a new Alembic migration."""
     config = Config(str(BACKEND / "alembic.ini"))
@@ -120,12 +120,24 @@ def test_models_match_the_migration(template_db):
     command.check(config)
 
 
+def _query_plan(db, sql: str) -> str:
+    return str(db.connection().exec_driver_sql(f"EXPLAIN QUERY PLAN {sql}").fetchall())
+
+
 def test_list_query_uses_the_name_index(db):
-    explained = (
-        db.connection()
-        .exec_driver_sql(
-            "EXPLAIN QUERY PLAN SELECT id FROM employees ORDER BY last_name, first_name LIMIT 20"
-        )
-        .fetchall()
+    plan = _query_plan(db, "SELECT id FROM employees ORDER BY last_name, first_name LIMIT 20")
+    assert "ix_employees_name" in plan
+
+
+def test_job_title_filter_uses_the_lower_case_index(db):
+    query = repo.apply_filters(select(Employee), EmployeeFilters(job_title=" DevOps Engineer"))
+    sql = query.compile(dialect=db.bind.dialect, compile_kwargs={"literal_binds": True})
+    assert "ix_employees_job_title_lower" in _query_plan(db, str(sql))
+
+
+def test_recent_salary_changes_use_the_created_index(db):
+    plan = _query_plan(
+        db, "SELECT id FROM salary_records ORDER BY created_at DESC, id DESC LIMIT 10"
     )
-    assert any("ix_employees_name" in str(row) for row in explained)
+    assert "ix_salary_records_created" in plan
+    assert "TEMP B-TREE" not in plan  # read in index order, no sort of the whole table
