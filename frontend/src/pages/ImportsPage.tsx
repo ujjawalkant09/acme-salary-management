@@ -377,7 +377,13 @@ function Review({ job, onCancelled }: { job: ImportJob; onCancelled: () => void 
                       <Td>{count(row.row_number)}</Td>
                       <Td>{row.employee_code ?? '–'}</Td>
                       <Td className="whitespace-normal text-error">
-                        {row.errors.map((e) => e.message).join(' ')}
+                        <ul className="space-y-0.5">
+                          {row.errors.map((e, i) => (
+                            <li key={i}>
+                              {e.field}: {e.message}
+                            </li>
+                          ))}
+                        </ul>
                       </Td>
                     </tr>
                   ))}
