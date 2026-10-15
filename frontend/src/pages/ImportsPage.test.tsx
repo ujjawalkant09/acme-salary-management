@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -41,9 +41,36 @@ describe('Imports', () => {
     })
     renderApp(<ImportsPage />)
     expect(await screen.findByText('Review salary-review.xlsx')).toBeInTheDocument()
-    expect(await screen.findByText('This email is already used.')).toBeInTheDocument()
+    expect(await screen.findByText('email: This email is already used.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save 12 correct rows' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Download problem rows' })).toHaveAttribute('href', '/api/v1/imports/job-1/errors.csv')
+  })
+
+  it('lists each problem in a row on its own line with its column', async () => {
+    mockApi({
+      'GET /imports': page([job]),
+      'GET /imports/job-1': job,
+      'GET /imports/job-1/rows': {
+        ...page([]),
+        items: [{
+          row_number: 31,
+          employee_code: 'ACM-020210',
+          action: 'error',
+          payload: {},
+          errors: [
+            { field: 'salary_effective_date', message: 'Before the hire date' },
+            { field: 'hire_date', message: 'More than a year ahead' },
+          ],
+        }],
+      },
+    })
+    renderApp(<ImportsPage />)
+    const first = await screen.findByText('salary_effective_date: Before the hire date')
+    const problems = within(first.closest('ul')!).getAllByRole('listitem')
+    expect(problems.map((li) => li.textContent)).toEqual([
+      'salary_effective_date: Before the hire date',
+      'hire_date: More than a year ahead',
+    ])
   })
 
   it('tells HR Viewers that only Admins can import', async () => {
