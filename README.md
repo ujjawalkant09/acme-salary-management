@@ -33,12 +33,13 @@ npm run dev
 **Demo logins** (created by the seed): `priya.sharma@acme.example` (HR Admin) and `arjun.mehta@acme.example` (HR Viewer), with the passwords you set in `backend/.env`.
 
 ## Deploy to AWS
-One command builds the image and deploys everything (one EC2 server, Postgres, HTTPS) to https://acme.docrelay.in. The demo server is off when unused to save money. Setup, commands and costs: [.claude/skills/aws-deploy/SKILL.md](.claude/skills/aws-deploy/SKILL.md).
+One command builds the image and deploys everything (one EC2 server, Postgres, HTTPS) to https://acme.docrelay.in. The demo server is off when unused to save money; while it is off, anyone with the wake link can start it at https://wake.acme.docrelay.in (about 2–3 minutes). Setup, commands and costs: [.claude/skills/aws-deploy/SKILL.md](.claude/skills/aws-deploy/SKILL.md).
 From GitHub: **Actions > Deploy > Run workflow** runs every check and releases `main` (it turns the server on if it is off).
 ```bash
 .claude/skills/aws-deploy/scripts/deploy.sh          # create or update everything, release the current commit
 .claude/skills/aws-deploy/scripts/server.sh start    # turn the demo on (stops itself after 4 hours)
 .claude/skills/aws-deploy/scripts/server.sh stop     # back up, then turn it off
+.claude/skills/aws-deploy/scripts/logins.sh          # (your own terminal) demo passwords and the wake link
 ```
 
 ## Checks

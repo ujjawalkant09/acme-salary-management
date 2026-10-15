@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Start the ACME demo</title>
+<style>
+  :root { --bg: #f8fafc; --card: #fff; --text: #0f172a; --muted: #64748b; --border: #e2e8f0; --accent: #0f172a; --on-accent: #fff; --error: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #020617; --card: #0f172a; --text: #f1f5f9; --muted: #94a3b8; --border: #1e293b; --accent: #f1f5f9; --on-accent: #0f172a; --error: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  main { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  p { margin: 0 0 20px; color: var(--muted); }
+  label { display: block; font-weight: 500; margin-bottom: 6px; }
+  input { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
+  button { width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  #message { margin: 14px 0 0; min-height: 1.5em; }
+  #message.error { color: var(--error); }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ACME Salary Management</h1>
+  <p id="intro">Checking whether the demo is on…</p>
+  <form id="form" hidden>
+    <label for="code">Wake code</label>
+    <input id="code" type="password" autocomplete="off" required>
+    <button id="start" type="submit">Start demo</button>
+  </form>
+  <p id="message" role="status"></p>
+</main>
+<script>
+  const SITE_URL = "{{SITE_URL}}";
+  const POLL_MS = 5000;
+  const GIVE_UP_MS = 10 * 60 * 1000;
+  const form = document.getElementById("form");
+  const codeInput = document.getElementById("code");
+  const button = document.getElementById("start");
+  const intro = document.getElementById("intro");
+  const message = document.getElementById("message");
+
+  // The code can come in the link (#code=...). The part after # never reaches a server.
+  codeInput.value = new URLSearchParams(location.hash.slice(1)).get("code") || "";
+
+  function say(text, isError) {
+    message.textContent = text;
+    message.className = isError ? "error" : "";
+  }
+
+  async function status() {
+    const response = await fetch("/status", { cache: "no-store" });
+    if (!response.ok) throw new Error("status " + response.status);
+    return response.json();
+  }
+
+  async function waitUntilReady() {
+    form.hidden = true;
+    intro.textContent = "Starting the demo. This usually takes 2 to 3 minutes; this page opens it when it is ready.";
+    const started = Date.now();
+    while (Date.now() - started < GIVE_UP_MS) {
+      const seconds = Math.round((Date.now() - started) / 1000);
+      say("Waiting… " + seconds + "s");
+      try {
+        if ((await status()).ready) {
+          say("Ready. Opening the demo…");
+          location.href = SITE_URL;
+          return;
+        }
+      } catch (error) {
+        // A missed check is retried on the next round.
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+    say("The demo did not come up within 10 minutes. Ask the owner to check the server.", true);
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    say("");
+    try {
+      const response = await fetch("/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: codeInput.value.trim() }),
+      });
+      if (response.status === 429) {
+        say("Too many tries. Wait a minute and try again.", true);
+      } else if (!response.ok) {
+        say((await response.json()).message || "Something went wrong.", true);
+      } else {
+        await waitUntilReady();
+        return;
+      }
+    } catch (error) {
+      say("Could not reach the wake service. Check your connection and try again.", true);
+    }
+    button.disabled = false;
+  });
+
+  status()
+    .then((result) => {
+      if (result.ready) {
+        intro.textContent = "The demo is on. Opening it…";
+        location.href = SITE_URL;
+      } else if (result.state === "pending" || result.state === "running") {
+        waitUntilReady();
+      } else {
+        intro.textContent = "The demo server is off to save money. Enter the wake code to start it.";
+        form.hidden = false;
+      }
+    })
+    .catch(() => {
+      intro.textContent = "Enter the wake code to start the demo.";
+      form.hidden = false;
+    });
+</script>
+</body>
+</html>

@@ -1,10 +1,18 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: ACME Salary Management - one EC2 server running Docker Compose, plus S3, ECR, logs, snapshots and a budget alert.
+Description: ACME Salary Management - one EC2 server running Docker Compose, plus S3, ECR, logs, snapshots, a budget alert and a wake page.
 
 Parameters:
   ImageId:
     Type: AWS::EC2::Image::Id
     Description: Ubuntu 24.04 arm64 image. Set once by deploy.sh when the stack is created; changing it replaces the server.
+  Domain:
+    Type: String
+    AllowedPattern: "^[a-z0-9-]+(\\.[a-z0-9-]+)+$"
+    Description: The app's address, e.g. acme.docrelay.in. The wake page is wake.<Domain>.
+  WakeCertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate for wake.<Domain> in this region, requested by deploy.sh. Empty = no wake address yet.
   AlertEmail:
     Type: String
     Description: Receives the budget alerts.
@@ -23,6 +31,7 @@ Parameters:
 
 Conditions:
   HasGitHubRepo: !Not [!Equals [!Ref GitHubSubjectPrefix, ""]]
+  HasWakeDomain: !Not [!Equals [!Ref WakeCertificateArn, ""]]
 
 Resources:
   Vpc:
@@ -224,6 +233,133 @@ Resources:
             RetainRule: { Count: 4 }
             CopyTags: true
 
+  # Wake page: wake.<Domain> starts the stopped server for anyone with the wake code (in SSM).
+  # It lives outside the server so it answers while the server is off. deploy.sh uploads the
+  # code in wake/ after each stack update; the inline code is only a placeholder until then.
+  WakeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /${AWS::StackName}/wake
+      RetentionInDays: 30
+
+  WakeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: wake
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: "*"
+              - Effect: Allow
+                Action: ec2:StartInstances
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Server}
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/wake/WAKE_CODE
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt WakeLogGroup.Arn
+
+  WakeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 128
+      Timeout: 10
+      Role: !GetAtt WakeRole.Arn
+      LoggingConfig: { LogGroup: !Ref WakeLogGroup }
+      Environment:
+        Variables:
+          INSTANCE_ID: !Ref Server
+          CODE_PARAM: !Sub /${AWS::StackName}/wake/WAKE_CODE
+          SITE_URL: !Sub https://${Domain}
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 503, "body": "The wake page is not deployed yet."}
+
+  WakeApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub ${AWS::StackName}-wake
+      ProtocolType: HTTP
+      # Only reachable at wake.<Domain>.
+      DisableExecuteApiEndpoint: true
+
+  WakeIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WakeApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt WakeFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  WakePageRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WakeApi
+      RouteKey: GET /
+      Target: !Sub integrations/${WakeIntegration}
+
+  WakeStatusRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WakeApi
+      RouteKey: GET /status
+      Target: !Sub integrations/${WakeIntegration}
+
+  WakeStartRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WakeApi
+      RouteKey: POST /start
+      Target: !Sub integrations/${WakeIntegration}
+
+  # Throttled for everyone together: guessing the code is hopeless and a flood can't run up a bill.
+  WakeStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WakeApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings: { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 10 }
+
+  WakeInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WakeFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${WakeApi}/*
+
+  WakeDomainName:
+    Type: AWS::ApiGatewayV2::DomainName
+    Condition: HasWakeDomain
+    Properties:
+      DomainName: !Sub wake.${Domain}
+      DomainNameConfigurations:
+        - { CertificateArn: !Ref WakeCertificateArn, EndpointType: REGIONAL, SecurityPolicy: TLS_1_2 }
+
+  WakeMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Condition: HasWakeDomain
+    DependsOn: WakeStage
+    Properties:
+      ApiId: !Ref WakeApi
+      DomainName: !Ref WakeDomainName
+      Stage: $default
+
   # An alert, not a cap: AWS emails when the month's cost passes 80% or is forecast to pass 100%.
   Budget:
     Type: AWS::Budgets::Budget
@@ -316,6 +452,12 @@ Outputs:
     Value: !GetAtt Repository.RepositoryUri
   LogGroup:
     Value: !Ref LogGroup
+  WakeFunctionName:
+    Value: !Ref WakeFunction
+  WakeTarget:
+    Condition: HasWakeDomain
+    Description: Where the wake.<Domain> CNAME points.
+    Value: !GetAtt WakeDomainName.RegionalDomainName
   DeployRoleArn:
     Condition: HasGitHubRepo
     Value: !GetAtt GitHubDeployRole.Arn

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake sleep for tests: retries run instantly.
+echo "sleep $*" >>"$STUB_LOG"

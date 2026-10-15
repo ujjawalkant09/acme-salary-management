@@ -155,3 +155,14 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | The problem-rows CSV (`errors.csv`) escapes formulas the same way as the employee export | It writes back cells exactly as uploaded, so a file from someone else could put a live formula in front of an HR Admin |
 | Frontend coverage with `@vitest/coverage-v8` (`npm run coverage`), leaving out the vendored shadcn/ui files; backend coverage with `pytest-cov` on demand (`uv run --with pytest-cov`) | Shows untested code without adding a backend dependency |
 | Kept as they are: login is limited per IP (5 a minute) and not per account; uvicorn trusts forwarded headers from any address | bcrypt keeps guessing slow; only Caddy can reach the app, and Caddy replaces `X-Forwarded-For`. Revisit if port 8000 is ever exposed |
+
+## Wake page (15 Oct 2026)
+| Decision | Why |
+|---|---|
+| A wake page at `wake.acme.docrelay.in` (Lambda + API Gateway HTTP API + ACM certificate) starts the stopped server; the main address keeps pointing straight at the server | Something has to answer while the server is off. A separate address needs no CloudFront in front of the app, no DNS change for `acme` and no change to Caddy's certificate |
+| Access is a shared wake code (64 random hex characters in SSM, compared in constant time), shareable as `#code=…` in the link; API Gateway throttles the whole page to 2 requests a second | The app's own logins live on the server that is off. Cognito or per-person expiring links are more to build and run than "may start a demo server" needs; the worst a leaked code does is start the server, and the app still needs a login. The part after `#` never reaches a server or a log |
+| Starting needs a click, not just a visit | Crawlers and link previews would otherwise keep the server on |
+| Every boot schedules the auto-stop (a systemd unit that runs before the SSM agent, so `server.sh start <hours>` still wins) | A server started by the wake page or the AWS console would otherwise run until someone stops it |
+| The wake code lives one level below the app's secrets (`/acme-salary/wake/WAKE_CODE`) | The server reads only the top level into its settings, so the app never gets it |
+| The Lambda's code is uploaded by `deploy.sh` (`update-function-code`) after the stack; the stack holds a placeholder | Inline code in the template is capped at 4 KB and can't be tested as a file; a separate code bucket would have to exist before the stack that creates the bucket |
+| The certificate is requested by `deploy.sh`, which adds ACM's proof record in GoDaddy and waits, and is passed to the stack; the stack's wake address is off until it exists | CloudFormation can only finish DNS validation by itself in Route 53; the DNS is in GoDaddy |

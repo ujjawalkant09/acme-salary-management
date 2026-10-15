@@ -1,6 +1,6 @@
 ---
 name: aws-deploy
-description: Deploy ACME Salary Management to AWS (one EC2 server, Docker Compose) at acme.docrelay.in, and turn the demo server on or off to save money. Use when the user asks to deploy, release, start, stop, wake up, shut down or check the status of the AWS server, or to tear it down.
+description: Deploy ACME Salary Management to AWS (one EC2 server, Docker Compose) at acme.docrelay.in, turn the demo server on or off to save money, and run the wake page (wake.acme.docrelay.in) that lets people with the wake code start it. Use when the user asks to deploy, release, start, stop, wake up, shut down or check the status of the AWS server, about the wake page or wake link, or to tear it down.
 ---
 
 # aws-deploy
@@ -16,10 +16,18 @@ All commands run from the repo root on the author's laptop.
 | Is it on? | `.claude/skills/aws-deploy/scripts/server.sh status` | Claude or the author |
 | Turn it on for a demo | `.claude/skills/aws-deploy/scripts/server.sh start [hours]` | Claude or the author |
 | Turn it off | `.claude/skills/aws-deploy/scripts/server.sh stop` | Claude or the author |
-| Show the demo passwords | `.claude/skills/aws-deploy/scripts/logins.sh` | **Author only**, in their own terminal |
+| Show the demo passwords and the wake link | `.claude/skills/aws-deploy/scripts/logins.sh` | **Author only**, in their own terminal |
 | Delete everything | `.claude/skills/aws-deploy/scripts/destroy.sh` | **Author only**, in their own terminal |
 
 `logins.sh` and `destroy.sh` refuse to run when their output is captured, so Claude cannot run them.
+
+## Wake page
+While the server is off, `https://acme.docrelay.in` can't answer. `https://wake.acme.docrelay.in` always can: it asks for the **wake code** and starts the server, then opens the app when `/api/v1/health` answers (about 2–3 minutes). Share the link from `logins.sh` (`https://wake.acme.docrelay.in/#code=…`): the code after `#` fills the box and never reaches a server or a log.
+- **Who can start it:** only someone with the code (64 random hex characters in SSM at `/acme-salary/wake/WAKE_CODE`, compared in constant time). Without it the page only says whether the demo is on. The app still needs its own login.
+- **Abuse:** API Gateway throttles the whole page (2 requests a second, bursts of 10), so the code can't be guessed and a flood can't run up a bill. Starting is safe to repeat: a running or starting server is left alone.
+- **It still stops itself:** every boot schedules the auto-stop (`server/boot-auto-stop.sh`, before the SSM agent starts), so a server woken here stops after `AUTO_STOP_HOURS` like any other.
+- **Rotate the code** (author, own terminal): `aws ssm delete-parameter --name /acme-salary/wake/WAKE_CODE --profile acme`, then `deploy.sh` makes a new one. Old links stop working at once.
+- **Built from:** `wake/index.py` + `wake/page.html` (a Python Lambda), an HTTP API with a custom domain, and a free ACM certificate for `wake.acme.docrelay.in`.
 
 ## Credential rules (Claude must follow these)
 - **Never read or print** `.env`, `backend/.env`, `~/.aws/credentials`, `~/.aws/config`, or any SSM parameter value. Don't `cat`, `grep`, `source` or `echo` them, and never run `aws ... --with-decryption` yourself.
@@ -32,10 +40,10 @@ All commands run from the repo root on the author's laptop.
 `.github/workflows/deploy.yml` (Actions > Deploy > Run workflow, `main` only) runs every CI check, then `deploy.sh --release` on an ARM runner. It signs in with the stack's `GitHubDeployRole` through OIDC: no AWS keys in GitHub. The role can't change the stack, IAM or stored secrets, but it runs commands on the server as root (so it can read `/opt/acme/.env`); only `production` environment jobs can use it, so give that environment required reviewers. One-time setup, after `GITHUB_OIDC_SUBJECT_PREFIX` is set in `config.env` and `deploy.sh` has run: repo variable `AWS_DEPLOY_ROLE_ARN` (stack output `DeployRoleArn`), repo secret `ALERT_EMAIL`, and an environment named `production`.
 
 ## How it works
-- **`deploy.sh`**: checks tools and the AWS identity (refuses root keys); applies `infra/stack.yml` with CloudFormation; creates missing secrets in SSM Parameter Store with random values (never changes existing ones); builds the image for `linux/arm64` from the repo-root `Dockerfile` and pushes it to ECR tagged with the commit (needs a clean git tree); points `acme` in GoDaddy at the Elastic IP; copies `server/` to the server through S3 and runs `remote-update.sh` with SSM; waits for `https://$DOMAIN/api/v1/health`; schedules the auto-stop.
+- **`deploy.sh`**: checks tools and the AWS identity (refuses root keys); gets the wake page's ACM certificate (requests it and adds its proof record in GoDaddy the first time); applies `infra/stack.yml` with CloudFormation; creates missing secrets in SSM Parameter Store with random values (never changes existing ones); uploads `wake/` to the wake Lambda; builds the image for `linux/arm64` from the repo-root `Dockerfile` and pushes it to ECR tagged with the commit (needs a clean git tree); points `acme` in GoDaddy at the Elastic IP and `wake.acme` at API Gateway; copies `server/` to the server through S3 and runs `remote-update.sh` with SSM; waits for `https://$DOMAIN/api/v1/health`; schedules the auto-stop.
 - **`server.sh start`**: starts the server, waits for the site and schedules it to back up and stop itself after `AUTO_STOP_HOURS` (or the hours given; 0 = never). Running it again on a running server just resets the timer.
 - **`server.sh stop`**: backs up the database and files to S3, then stops. The Elastic IP stays, so DNS never changes.
-- **On the server** (`server/`): `remote-update.sh` writes `/opt/acme/.env` (root-only) straight from SSM, pulls the image, runs `alembic upgrade head`, swaps containers and goes back to the previous image if the app is unhealthy. `backup.sh` runs nightly (03:00 IST), before every stop and before an auto-stop.
+- **On the server** (`server/`): `remote-update.sh` writes `/opt/acme/.env` (root-only) straight from SSM, pulls the image, runs `alembic upgrade head`, swaps containers and goes back to the previous image if the app is unhealthy, and installs the boot-time auto-stop. `backup.sh` runs nightly (03:00 IST), before every stop and before an auto-stop.
 
 ## What the app image provides
 - The repo-root `Dockerfile` building for arm64, serving FastAPI and the built UI on port **8000**.
@@ -52,6 +60,7 @@ All commands run from the repo root on the author's laptop.
 ## Cost (Mumbai, estimates)
 - **Stopped:** about $6/month (Elastic IP ~$3.6, 20 GB disk ~$2).
 - **Running:** about 2 cents per hour more.
+- **Wake page:** about $0. Lambda and API Gateway charge per request (free tier covers far more than a demo uses) and the ACM certificate is free.
 - The $10 budget emails at $8 actual or $10 forecast. It is an alert, not a cap.
 
 ## Checking changes to this skill
@@ -60,4 +69,6 @@ Run from this folder:
 uvx --from shellcheck-py shellcheck scripts/*.sh server/*.sh tests/stubs/*
 uvx cfn-lint infra/stack.yml
 npx --yes bats@1.11.1 tests
+uvx ruff check wake tests && uvx ruff format --check wake tests
+uvx --with boto3 pytest -q tests/test_wake.py
 ```
