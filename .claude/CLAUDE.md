@@ -3,6 +3,10 @@
 Web app for an HR Manager to manage and analyze salaries for ~10,000 employees.
 Read before building: [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md), [docs/DECISIONS.md](../docs/DECISIONS.md), and the design pack in [docs/design/](../docs/design/). Where ARCHITECTURE.md and the design docs differ, the design docs win.
 
+## Facts, not assumptions
+- **Don't assume anything.** Before answering a question about this project (what changed, what is tested, whether something works), read the code, the diff or the command output first, then answer with what you actually found.
+- Say where each fact comes from (file and line, or the command you ran). If you haven't checked something, say so instead of guessing.
+
 ## Code style
 - **DRY, but not clever.** Pull out shared logic when it is genuinely repeated (2–3 real uses), not in anticipation. No extra layers, base classes, factories or config for things that have one use.
 - **Simple and readable first.** A new reader should understand a feature by reading it once. Prefer plain functions, clear names and small modules over abstractions.

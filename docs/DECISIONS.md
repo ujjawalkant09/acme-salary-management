@@ -147,3 +147,11 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | A Claude skill, `as-user-oracles`, runs and writes the oracles; it is committed (the author's call, like `aws-deploy`) | The workflow (throwaway app, probe the page, prove a new scenario can go RED) is the same each time; committed, CI tests its scripts |
 | The skill's throwaway app makes its own database, secret and random demo passwords instead of reading `backend/.env` | Data-changing scenarios never touch the dev database, it works in a fresh worktree, and no real password is read |
 | The signed-in user reaches the pages through React context set by `App`, not from the query cache | Signing out crashed the app (blank page): pages read the cache and re-rendered with no user before `App` swapped to sign-in. Found by the new oracle (login S4) |
+
+## Test and security review (15 Oct 2026)
+| Decision | Why |
+|---|---|
+| "One open import at a time" is also a partial unique index (`uq_import_jobs_one_open`); the service's check stays for the friendly message, and two uploads at the same moment get the generic `409` | The check alone let two simultaneous uploads both through |
+| The problem-rows CSV (`errors.csv`) escapes formulas the same way as the employee export | It writes back cells exactly as uploaded, so a file from someone else could put a live formula in front of an HR Admin |
+| Frontend coverage with `@vitest/coverage-v8` (`npm run coverage`), leaving out the vendored shadcn/ui files; backend coverage with `pytest-cov` on demand (`uv run --with pytest-cov`) | Shows untested code without adding a backend dependency |
+| Kept as they are: login is limited per IP (5 a minute) and not per account; uvicorn trusts forwarded headers from any address | bcrypt keeps guessing slow; only Caddy can reach the app, and Caddy replaces `X-Forwarded-For`. Revisit if port 8000 is ever exposed |

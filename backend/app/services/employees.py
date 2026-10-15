@@ -453,7 +453,7 @@ EXPORT_COLUMNS = [
 ]  # fmt: skip
 
 
-def _safe_cell(value) -> str:
+def safe_cell(value) -> str:
     """Stop spreadsheet formula injection: text starting with = + - @ gets a leading '."""
     text = "" if value is None else str(value)
     if text and text[0] in "=+-@\t\r" and not _is_number(text):
@@ -475,7 +475,7 @@ def export_csv(db: Session, filters: EmployeeFilters) -> str:
     writer.writerow(EXPORT_COLUMNS)
     for e in repo.iter_filtered(db, filters, _outlier_ids(db, filters)):
         writer.writerow(
-            _safe_cell(v)
+            safe_cell(v)
             for v in (
                 e.employee_code, e.first_name, e.last_name, e.email, e.job_title, e.job_level,
                 e.department.name, e.country_code, e.city, e.employment_type, e.fte,

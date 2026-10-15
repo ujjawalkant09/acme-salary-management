@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -37,6 +38,8 @@ IMPORT_STATUSES = (
     "failed",
     "cancelled",
 )
+# An import in one of these is still open; only one may be open at a time.
+OPEN_IMPORT_STATUSES = ("queued", "validating", "validated", "commit_queued", "committing")
 IMPORT_MODES = ("all_or_nothing", "valid_rows_only")
 
 
@@ -206,6 +209,14 @@ class ImportJob(Base):
         CheckConstraint(_in("status", IMPORT_STATUSES), name="ck_import_status"),
         CheckConstraint(_in("mode", IMPORT_MODES), name="ck_import_mode"),
         Index("ix_import_jobs_status", "status"),
+        # Backs the service's "one open import" check when two uploads arrive at once.
+        Index(
+            "uq_import_jobs_one_open",
+            text("(1)"),
+            unique=True,
+            sqlite_where=text(_in("status", OPEN_IMPORT_STATUSES)),
+            postgresql_where=text(_in("status", OPEN_IMPORT_STATUSES)),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

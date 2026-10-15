@@ -14,13 +14,13 @@ async function fetchMe(): Promise<User | null> {
   }
 }
 
-/** The signed-in user, `null` when signed out, `undefined` while loading. */
+/** The signed-in user, `null` when signed out, `undefined` while loading. Only App reads it. */
 export function useMe() {
   return useQuery({ queryKey: ME_KEY, queryFn: fetchMe, staleTime: Infinity })
 }
 
-/** The signed-in user, provided by App around the signed-in app only. Pages read it from here,
- * not from the query, so none of them can render with a user who just signed out. */
+// App hands the user to the signed-in app through context instead of every component reading
+// `useMe`: on sign-out, App switches to the sign-in page before anything inside sees no user.
 export const UserContext = createContext<User | null>(null)
 
 /** For components inside the signed-in app shell, where the user is always known. */
@@ -48,9 +48,11 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => api<void>('/auth/logout', { method: 'POST' }),
     onSettled: () => {
-      // Signed out first, so the app shows sign-in before the shell can read a missing user.
+      // Set on the query App is watching (clearing the cache first would detach App from it),
+      // then forget everything else this session loaded.
       client.setQueryData(ME_KEY, null)
       client.removeQueries({ predicate: (query) => query.queryKey[0] !== ME_KEY[0] })
+      client.getMutationCache().clear()
     },
   })
 }

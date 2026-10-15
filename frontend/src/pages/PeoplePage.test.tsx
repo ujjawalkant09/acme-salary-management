@@ -1,9 +1,9 @@
-import { screen, within } from '@testing-library/react'
+import { act, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { LIST_ITEM } from '@/test/fixtures'
-import { mockApi, renderApp } from '@/test/utils'
+import { type ApiRoutes, META, mockApi, renderApp } from '@/test/utils'
 
 import PeoplePage from './PeoplePage'
 
@@ -17,13 +17,14 @@ const facets = {
   employment_type: { full_time: 110, part_time: 10 },
 }
 
-function setup(route = '/people') {
+function setup(route = '/people', routes: ApiRoutes = {}) {
   const fetchMock = mockApi({
     'GET /employees': { items: [LIST_ITEM], page: 1, page_size: 20, total: 1, pages: 1 },
     'GET /employees/facets': facets,
+    ...routes,
   })
-  renderApp(<PeoplePage />, { route })
-  return { fetchMock, user: userEvent.setup() }
+  const { client } = renderApp(<PeoplePage />, { route })
+  return { fetchMock, client, user: userEvent.setup() }
 }
 
 const location = () => screen.getByTestId('location').textContent
@@ -78,5 +79,102 @@ describe('People', () => {
     const { user } = setup('/people?country=IN')
     await user.click(await screen.findByText('Asha Verma'))
     expect(location()).toBe('/people/7')
+  })
+})
+
+const ASHA_AND_RAVI = {
+  items: [LIST_ITEM, { ...LIST_ITEM, id: 8, first_name: 'Ravi', last_name: 'Kumar', employee_code: 'ACM-004522' }],
+  page: 1, page_size: 20, total: 45, pages: 3,
+}
+
+describe('People filters', () => {
+  it('status, level, unusual salaries and clear all', async () => {
+    const { user } = setup()
+    await screen.findByText('Asha Verma')
+    expect(screen.getByRole('radio', { name: /Everyone/ }).closest('label')).toHaveTextContent('128')
+    await user.click(screen.getByRole('radio', { name: /People who left/ }))
+    expect(location()).toBe('/people?status=left')
+    await user.click(screen.getByRole('button', { name: 'Level 3, 50 people' }))
+    expect(location()).toBe('/people?status=left&level=3')
+    expect(screen.getByRole('button', { name: 'Level 3, 50 people' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('checkbox', { name: 'Only people paid outside the usual range' }))
+    expect(location()).toBe('/people?status=left&level=3&outliers_only=true')
+    await user.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(location()).toBe('/people')
+  })
+
+  it('a salary range takes whole numbers only, after typing pauses', async () => {
+    const { user } = setup()
+    await screen.findByText('Asha Verma')
+    const min = screen.getByLabelText('Minimum salary in USD')
+    await user.type(min, '50k000')
+    expect(min).toHaveValue('50000')
+    await vi.waitFor(() => expect(location()).toBe('/people?min_salary_usd=50000'))
+    await user.type(screen.getByLabelText('Maximum salary in USD'), '90000')
+    await vi.waitFor(() => expect(location()).toBe('/people?min_salary_usd=50000&max_salary_usd=90000'))
+  })
+
+  it('shows the five biggest countries first, the rest on request', async () => {
+    const { client, user } = setup()
+    const countries = ['IN', 'US', 'CA', 'SG', 'BR', 'AU'].map((code) => ({ code, name: `Country ${code}`, currency: 'USD' }))
+    act(() => client.setQueryData(['meta'], { ...META, countries }))
+    await screen.findByText('Asha Verma')
+    expect(screen.queryByText('Country AU')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Show 1 more' }))
+    expect(screen.getByText('Country AU')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Show fewer' }))
+    expect(screen.queryByText('Country AU')).toBeNull()
+  })
+
+  it('the filter panel can be hidden, and opened as a drawer on phones', async () => {
+    const { user } = setup('/people?country=IN&level=3')
+    await screen.findByText('Asha Verma')
+    await user.click(screen.getByRole('button', { name: 'Hide filters' }))
+    expect(screen.getByRole('button', { name: 'Show filters' })).toHaveAttribute('aria-pressed', 'false')
+    await user.click(screen.getByRole('button', { name: 'Filters (2)' }))
+    expect(screen.getByRole('complementary', { name: 'Filters' })).not.toHaveClass('max-md:hidden')
+    await user.click(screen.getByRole('button', { name: 'Close filters' }))
+    expect(screen.getByRole('complementary', { name: 'Filters' })).toHaveClass('max-md:hidden')
+  })
+})
+
+describe('People results', () => {
+  it('says when no one matches and offers to clear the filters', async () => {
+    const { user } = setup('/people?country=US', { 'GET /employees': { items: [], page: 1, page_size: 20, total: 0, pages: 0 } })
+    expect(await screen.findByText('No one matches')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Clear all filters' }))
+    expect(location()).toBe('/people')
+  })
+
+  it('shows a load error with a retry', async () => {
+    setup('/people', { 'GET /employees': () => ({ status: 500, body: { error: { message: 'List is down' } } }) })
+    expect(await screen.findByText('List is down')).toBeInTheDocument()
+  })
+
+  it('shows a reference-data load error with a retry', async () => {
+    const { client } = setup('/people', { 'GET /meta': () => ({ status: 500, body: { error: { message: 'Meta is down' } } }) })
+    await act(() => client.resetQueries({ queryKey: ['meta'] }))
+    expect(await screen.findByText('Meta is down')).toBeInTheDocument()
+  })
+
+  it('pages through the results, keeping the filters', async () => {
+    const { user } = setup('/people?country=IN', { 'GET /employees': ASHA_AND_RAVI })
+    expect(await screen.findByText('1–20 of 45')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(location()).toBe('/people?country=IN&page=2')
+  })
+
+  it('rows can be moved through and opened with the keyboard', async () => {
+    const { user } = setup('/people', { 'GET /employees': ASHA_AND_RAVI })
+    const asha = (await screen.findByText('Asha Verma')).closest('tr')!
+    const ravi = screen.getByText('Ravi Kumar').closest('tr')!
+    asha.focus()
+    await user.keyboard('{ArrowDown}')
+    expect(ravi).toHaveFocus()
+    await user.keyboard('{ArrowUp}')
+    expect(asha).toHaveFocus()
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect(location()).toBe('/people/8')
   })
 })
