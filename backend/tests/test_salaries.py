@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import event
 
 from app.core import cache
 from app.models import SalaryRecord
@@ -233,6 +234,19 @@ async def test_current_salary_matches_latest_effective_record(admin_client, make
         latest.effective_date,
     )
     assert e.current_salary == 105000
+
+
+async def test_recent_changes_load_their_employees_in_one_query(make_employee, db):
+    for first in ("Asha", "Ben", "Chen"):
+        await make_employee(first_name=first, last_name="Lee")
+    db.expunge_all()  # nothing cached, so a lookup per entry would show up as a query
+    queries = []
+    event.listen(db.bind.sync_engine, "before_cursor_execute", lambda *a: queries.append(a[2]))
+
+    feed = await service.recent_changes(db, limit=3)
+
+    assert [c.employee_name for c in feed] == ["Chen Lee", "Ben Lee", "Asha Lee"]
+    assert len(queries) == 1
 
 
 async def test_recent_changes_feed(admin_client, make_employee):
