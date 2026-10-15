@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import idempotency
 from app.core.clock import now
@@ -23,12 +23,12 @@ DOCUMENT_RETENTION = timedelta(days=30)
 _last_daily_check = None
 
 
-def process_next_job(db: Session, storage: LocalStorage) -> bool:
-    job = imports.claim_next_job(db)
+async def process_next_job(db: AsyncSession, storage: LocalStorage) -> bool:
+    job = await imports.claim_next_job(db)
     if job is None:
         return False
     log.info("import job started", extra={"fields": {"job_id": job.id, "step": job.status}})
-    imports.run_job(db, storage, job)
+    await imports.run_job(db, storage, job)
     return True
 
 
@@ -40,31 +40,35 @@ def daily_tasks_due() -> bool:
     return False
 
 
-def purge_removed_documents(db: Session, storage: LocalStorage) -> int:
+async def purge_removed_documents(db: AsyncSession, storage: LocalStorage) -> int:
     """Delete files of documents removed more than 30 days ago (the row stays as a record)."""
-    docs = db.scalars(
-        select(EmployeeDocument).where(
-            EmployeeDocument.deleted_at < now() - DOCUMENT_RETENTION,
-            EmployeeDocument.storage_key != "",
+    docs = (
+        await db.scalars(
+            select(EmployeeDocument).where(
+                EmployeeDocument.deleted_at < now() - DOCUMENT_RETENTION,
+                EmployeeDocument.storage_key != "",
+            )
         )
     ).all()
     keys = [d.storage_key for d in docs]
     for doc in docs:
         doc.storage_key = ""
-    db.commit()
+    await db.commit()
     for key in keys:  # only after the database change has committed
-        storage.delete(key)
+        await storage.delete(key)
     return len(keys)
 
 
-def run_daily_tasks(db: Session, storage: LocalStorage, client: httpx.Client) -> None:
+async def run_daily_tasks(
+    db: AsyncSession, storage: LocalStorage, client: httpx.AsyncClient
+) -> None:
     """Every task is safe to run again: each one checks what is still to do."""
-    imports.reset_stuck_jobs(db)
-    promoted = employees.promote_due_salaries(db)
+    await imports.reset_stuck_jobs(db)
+    promoted = await employees.promote_due_salaries(db)
     if promoted:
         log.info("future salaries took effect", extra={"fields": {"employees": promoted}})
-    if now().hour >= FX_FETCH_HOUR_UTC and fx.refresh_daily_rates(db, client):
+    if now().hour >= FX_FETCH_HOUR_UTC and await fx.refresh_daily_rates(db, client):
         log.info("exchange rates refreshed")
-    idempotency.purge_expired(db)
-    imports.purge_old_rows(db)
-    purge_removed_documents(db, storage)
+    await idempotency.purge_expired(db)
+    await imports.purge_old_rows(db)
+    await purge_removed_documents(db, storage)

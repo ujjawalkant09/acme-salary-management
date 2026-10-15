@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.core.db import get_db
+from app.core.db import get_db, make_engine
 from app.main import create_app
 
 
@@ -78,11 +78,25 @@ def test_no_cors_headers_by_default(anon_client):
     assert "access-control-allow-origin" not in response.headers
 
 
-def test_request_session_is_rolled_back_and_closed(monkeypatch):
+async def test_request_session_is_rolled_back_and_closed(monkeypatch):
     calls = []
+
+    async def record(name):
+        calls.append(name)
+
     sessions = get_db()
-    session = next(sessions)
-    monkeypatch.setattr(session, "rollback", lambda: calls.append("rollback"))
-    monkeypatch.setattr(session, "close", lambda: calls.append("close"))
-    sessions.close()
+    session = await anext(sessions)
+    monkeypatch.setattr(session, "rollback", lambda: record("rollback"))
+    monkeypatch.setattr(session, "close", lambda: record("close"))
+    await sessions.aclose()
     assert calls == ["rollback", "close"]
+
+
+@pytest.mark.parametrize(
+    ("url", "driver"),
+    [("sqlite:///acme.db", "aiosqlite"), ("postgresql+psycopg://acme:pw@db:5432/acme", "psycopg")],
+)
+def test_database_url_gets_an_async_driver(url, driver):
+    """`DATABASE_URL` keeps the sync form Alembic uses; the app runs it on an async driver."""
+    dialect = make_engine(url).dialect
+    assert (dialect.driver, dialect.is_async) == (driver, True)

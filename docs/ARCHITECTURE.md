@@ -6,7 +6,7 @@
 | Layer | Choice | Reasoning |
 |------|--------|-----------|
 | API | **Python 3.12, FastAPI** + Pydantic v2 | Typed validation, auto OpenAPI docs, little boilerplate |
-| ORM / migrations | **SQLAlchemy 2.0** (sync) + **Alembic** | Mature, explicit, portable |
+| ORM / migrations | **SQLAlchemy 2.0** (asyncio, `AsyncSession`) + **Alembic** | Mature, explicit, portable; async endpoints don't hold a thread while waiting on the database |
 | DB | **PostgreSQL** (Docker locally and on the server); SQLite only for fast unit tests | Same engine in development and production; CI also runs the tests on Postgres |
 | UI | **React + Vite + TypeScript**, **shadcn/ui** (Tailwind + Radix), TanStack Table + Query, Recharts | One light styling system; we own the component code |
 | Tooling | uv, ruff, pytest; Vitest + Testing Library; GitHub Actions | Fast, standard |

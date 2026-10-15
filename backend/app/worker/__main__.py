@@ -5,9 +5,9 @@ Processes import jobs from the `import_jobs` table and runs the daily housekeepi
 old import rows and removed documents).
 """
 
+import asyncio
 import logging
 import signal
-import time
 
 import httpx
 
@@ -22,7 +22,7 @@ log = logging.getLogger("app.worker")
 POLL_SECONDS = 1.0
 
 
-def main() -> None:
+async def main() -> None:
     setup_logging(get_settings().log_level)
     stopping = False
 
@@ -34,19 +34,19 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
 
     storage = get_storage()
-    with SessionLocal() as db:
-        reset_stuck_jobs(db)
+    async with SessionLocal() as db:
+        await reset_stuck_jobs(db)
     log.info("worker started")
-    with httpx.Client(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=20) as client:
         while not stopping:
-            with SessionLocal() as db:
-                worked = process_next_job(db, storage)
+            async with SessionLocal() as db:
+                worked = await process_next_job(db, storage)
                 if daily_tasks_due():
-                    run_daily_tasks(db, storage, client)
+                    await run_daily_tasks(db, storage, client)
             if not worked:
-                time.sleep(POLL_SECONDS)
+                await asyncio.sleep(POLL_SECONDS)
     log.info("worker stopped")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

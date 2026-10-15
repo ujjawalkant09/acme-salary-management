@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from typing import Annotated, Literal
 
@@ -20,9 +21,9 @@ XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 @router.get("/template.xlsx")
 @limiter.limit(WRITE)
-def template(request: Request, _user: CurrentUser):
+async def template(request: Request, _user: CurrentUser):
     return Response(
-        import_file.template_xlsx(),
+        await asyncio.to_thread(import_file.template_xlsx),  # building a workbook is CPU-heavy
         media_type=XLSX_TYPE,
         headers={"Content-Disposition": 'attachment; filename="acme-import-template.xlsx"'},
     )
@@ -30,12 +31,12 @@ def template(request: Request, _user: CurrentUser):
 
 @router.post("", status_code=202, response_model=ImportJobOut)
 @limiter.limit(HEAVY)
-def start_import(
+async def start_import(
     request: Request, file: UploadFile, db: DB, user: AdminUser, key: IdempotencyHeader = None
 ):
-    data = read_upload(file)
+    data = await read_upload(file)
     fingerprint = {"file_name": file.filename, "sha256": hashlib.sha256(data).hexdigest()}
-    return idempotency.run(
+    return await idempotency.run(
         db, user, key, "POST /imports", fingerprint,
         lambda: service.start(db, get_storage(), user, file.filename, data), status_code=202,
     )  # fmt: skip
@@ -43,25 +44,25 @@ def start_import(
 
 @router.get("", response_model=Page[ImportJobOut])
 @limiter.limit(READ)
-def list_imports(
+async def list_imports(
     request: Request,
     db: DB,
     _user: CurrentUser,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 10,
 ):
-    return service.list_jobs(db, page, page_size)
+    return await service.list_jobs(db, page, page_size)
 
 
 @router.get("/{job_id}", response_model=ImportJobOut)
 @limiter.limit(READ)
-def get_import(request: Request, job_id: str, db: DB, _user: CurrentUser):
-    return service.job_out(db, service.get_job(db, job_id))
+async def get_import(request: Request, job_id: str, db: DB, _user: CurrentUser):
+    return await service.job_out(db, await service.get_job(db, job_id))
 
 
 @router.get("/{job_id}/rows", response_model=Page[ImportRowOut])
 @limiter.limit(READ)
-def import_rows(
+async def import_rows(
     request: Request,
     job_id: str,
     db: DB,
@@ -70,14 +71,14 @@ def import_rows(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    return service.list_rows(db, job_id, action, page, page_size)
+    return await service.list_rows(db, job_id, action, page, page_size)
 
 
 @router.get("/{job_id}/errors.csv")
 @limiter.limit(HEAVY)
-def errors_csv(request: Request, job_id: str, db: DB, _user: CurrentUser):
+async def errors_csv(request: Request, job_id: str, db: DB, _user: CurrentUser):
     return Response(
-        service.errors_csv(db, job_id),
+        await service.errors_csv(db, job_id),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="import-problems-{job_id[:8]}.csv"'},
     )
@@ -85,7 +86,7 @@ def errors_csv(request: Request, job_id: str, db: DB, _user: CurrentUser):
 
 @router.post("/{job_id}/commit", response_model=ImportJobOut)
 @limiter.limit(HEAVY)
-def commit_import(
+async def commit_import(
     request: Request,
     job_id: str,
     body: ImportCommitIn,
@@ -93,7 +94,7 @@ def commit_import(
     user: AdminUser,
     key: IdempotencyHeader = None,
 ):
-    return idempotency.run(
+    return await idempotency.run(
         db, user, key, f"POST /imports/{job_id}/commit", body,
         lambda: service.request_commit(db, job_id, body.mode),
     )  # fmt: skip
@@ -101,5 +102,5 @@ def commit_import(
 
 @router.post("/{job_id}/cancel", response_model=ImportJobOut)
 @limiter.limit(HEAVY)
-def cancel_import(request: Request, job_id: str, db: DB, _user: AdminUser):
-    return service.cancel(db, get_storage(), job_id)
+async def cancel_import(request: Request, job_id: str, db: DB, _user: AdminUser):
+    return await service.cancel(db, get_storage(), job_id)

@@ -25,7 +25,8 @@ import pytest  # noqa: E402
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: E402
 
 from app.core import cache, clock  # noqa: E402
 from app.core.db import get_db, make_engine  # noqa: E402
@@ -86,12 +87,12 @@ def frozen_clock(monkeypatch) -> FrozenClock:
 
 
 @pytest.fixture
-def session_factory(template_db, tmp_path) -> sessionmaker:
+async def session_factory(template_db, tmp_path) -> async_sessionmaker:
     db_path = tmp_path / "test.db"
     shutil.copy(template_db, db_path)
     engine = make_engine(f"sqlite:///{db_path}")
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    with factory() as db:
+    factory = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    async with factory() as db:
         db.add_all(Department(name=name) for name in ("Engineering", "Sales", "Finance"))
         db.add_all(
             FxRate(currency=c, rate_date=TODAY, usd_per_unit=r, source="test")
@@ -105,15 +106,20 @@ def session_factory(template_db, tmp_path) -> sessionmaker:
                      password_hash=VIEWER_HASH),
             ]
         )  # fmt: skip
-        db.commit()
+        await db.commit()
     yield factory
-    engine.dispose()
+    await engine.dispose()
 
 
 @pytest.fixture
-def db(session_factory) -> Session:
-    with session_factory() as session:
+async def db(session_factory) -> AsyncSession:
+    async with session_factory() as session:
         yield session
+
+
+async def count(db: AsyncSession, model, **filters) -> int:
+    """How many rows of `model` match `filters` (column=value)."""
+    return await db.scalar(select(func.count()).select_from(model).filter_by(**filters))
 
 
 @pytest.fixture(autouse=True)
@@ -128,18 +134,18 @@ def storage():
 
 
 @pytest.fixture
-def admin(db) -> User:
-    return db.query(User).filter_by(email=ADMIN_EMAIL).one()
+async def admin(db) -> User:
+    return await db.scalar(select(User).filter_by(email=ADMIN_EMAIL))
 
 
 @pytest.fixture
-def viewer(db) -> User:
-    return db.query(User).filter_by(email=VIEWER_EMAIL).one()
+async def viewer(db) -> User:
+    return await db.scalar(select(User).filter_by(email=VIEWER_EMAIL))
 
 
 def _client(session_factory, email: str | None, password: str | None) -> TestClient:
-    def override():
-        with session_factory() as session:
+    async def override():
+        async with session_factory() as session:
             yield session
 
     app.dependency_overrides[get_db] = override
@@ -173,7 +179,7 @@ def make_employee(db, admin):
     """Create an employee through the real service (so the first salary entry exists)."""
     counter = iter(range(1, 10_000))
 
-    def make(**overrides):
+    async def make(**overrides):
         n = next(counter)
         salary = {"amount": overrides.pop("salary", "100000")}
         if "currency" in overrides:
@@ -191,7 +197,7 @@ def make_employee(db, admin):
             "salary": salary,
         }
         data.update(overrides)
-        out = employee_service.create(db, admin, EmployeeCreate.model_validate(data))
-        return employee_service.get_or_404(db, out.id)
+        out = await employee_service.create(db, admin, EmployeeCreate.model_validate(data))
+        return await employee_service.get_or_404(db, out.id)
 
     return make

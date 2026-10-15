@@ -10,14 +10,14 @@ import hashlib
 import io
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import delete, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
 from app.core.clock import now, today
@@ -55,8 +55,8 @@ DETAIL_FIELDS = (
 
 
 # ---------- job views ----------
-def job_out(db: Session, job: ImportJob) -> ImportJobOut:
-    earlier = db.scalar(
+async def job_out(db: AsyncSession, job: ImportJob) -> ImportJobOut:
+    earlier = await db.scalar(
         select(func.max(ImportJob.finished_at)).where(
             ImportJob.file_sha256 == job.file_sha256,
             ImportJob.status == "completed",
@@ -85,45 +85,45 @@ def job_out(db: Session, job: ImportJob) -> ImportJobOut:
     )
 
 
-def get_job(db: Session, job_id: str) -> ImportJob:
-    job = db.get(ImportJob, job_id)
+async def get_job(db: AsyncSession, job_id: str) -> ImportJob:
+    job = await db.get(ImportJob, job_id)
     if job is None:
         raise NotFound("Import not found.")
     return job
 
 
-def list_jobs(db: Session, page: int, page_size: int) -> Page[ImportJobOut]:
-    total = db.scalar(select(func.count()).select_from(ImportJob))
-    jobs = db.scalars(
+async def list_jobs(db: AsyncSession, page: int, page_size: int) -> Page[ImportJobOut]:
+    total = await db.scalar(select(func.count()).select_from(ImportJob))
+    jobs = await db.scalars(
         select(ImportJob)
         .order_by(ImportJob.created_at.desc(), ImportJob.id)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    return Page.of([job_out(db, j) for j in jobs], total, page, page_size)
+    return Page.of([await job_out(db, j) for j in jobs], total, page, page_size)
 
 
-def list_rows(
-    db: Session, job_id: str, action: str | None, page: int, page_size: int
+async def list_rows(
+    db: AsyncSession, job_id: str, action: str | None, page: int, page_size: int
 ) -> Page[ImportRowOut]:
-    get_job(db, job_id)
+    await get_job(db, job_id)
     query = select(ImportRow).where(ImportRow.job_id == job_id)
     if action:
         query = query.where(ImportRow.action == action)
-    total = db.scalar(select(func.count()).select_from(query.subquery()))
-    rows = db.scalars(
+    total = await db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = await db.scalars(
         query.order_by(ImportRow.row_number).offset((page - 1) * page_size).limit(page_size)
     )
     return Page.of([ImportRowOut.model_validate(r) for r in rows], total, page, page_size)
 
 
-def errors_csv(db: Session, job_id: str) -> str:
+async def errors_csv(db: AsyncSession, job_id: str) -> str:
     """The problem rows exactly as uploaded, plus a column explaining what to fix."""
-    get_job(db, job_id)
+    await get_job(db, job_id)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["row", *COLUMNS, "problems"])
-    rows = db.scalars(
+    rows = await db.scalars(
         select(ImportRow)
         .where(ImportRow.job_id == job_id, ImportRow.action == "error")
         .order_by(ImportRow.row_number)
@@ -137,11 +137,11 @@ def errors_csv(db: Session, job_id: str) -> str:
 
 
 # ---------- upload, commit, cancel (API side) ----------
-def start(
-    db: Session, storage: LocalStorage, user: User, file_name: str | None, data: bytes
+async def start(
+    db: AsyncSession, storage: LocalStorage, user: User, file_name: str | None, data: bytes
 ) -> ImportJobOut:
     kind = file_kind(file_name, data)
-    running = db.scalar(select(ImportJob).where(ImportJob.status.in_(OPEN_IMPORT_STATUSES)))
+    running = await db.scalar(select(ImportJob).where(ImportJob.status.in_(OPEN_IMPORT_STATUSES)))
     if running is not None:
         raise Conflict(
             f"Another import ({running.filename}) is still open. Apply or cancel it first.",
@@ -154,18 +154,19 @@ def start(
         created_by=user.id,
     )
     key = _file_key(job.id)
-    storage.put(key, data)
+    await storage.put(key, data)
     try:
         db.add(job)
-        db.commit()
+        await db.commit()
     except Exception:
-        storage.delete(key)
+        await storage.delete(key)
         raise
-    return job_out(db, job)
+    await db.refresh(job)  # loads the creator for the response
+    return await job_out(db, job)
 
 
-def request_commit(db: Session, job_id: str, mode: str) -> ImportJobOut:
-    job = get_job(db, job_id)
+async def request_commit(db: AsyncSession, job_id: str, mode: str) -> ImportJobOut:
+    job = await get_job(db, job_id)
     if job.status != "validated":
         raise Conflict("This import can't be applied in its current state.")
     if mode == "all_or_nothing" and job.error_count:
@@ -175,19 +176,19 @@ def request_commit(db: Session, job_id: str, mode: str) -> ImportJobOut:
         )
     job.mode = mode
     job.status = "commit_queued"
-    db.commit()
-    return job_out(db, job)
+    await db.commit()
+    return await job_out(db, job)
 
 
-def cancel(db: Session, storage: LocalStorage, job_id: str) -> ImportJobOut:
-    job = get_job(db, job_id)
+async def cancel(db: AsyncSession, storage: LocalStorage, job_id: str) -> ImportJobOut:
+    job = await get_job(db, job_id)
     if job.status not in ("queued", "validated", "failed"):
         raise Conflict("This import can't be cancelled now.")
     job.status = "cancelled"
     job.finished_at = now()
-    db.commit()
-    storage.delete(_file_key(job.id))
-    return job_out(db, job)
+    await db.commit()
+    await storage.delete(_file_key(job.id))
+    return await job_out(db, job)
 
 
 def _file_key(job_id: str) -> str:
@@ -208,12 +209,12 @@ class Context:
     seen_emails: set[str] = field(default_factory=set)
 
 
-def load_context(db: Session) -> Context:
-    employees = list(db.scalars(select(Employee)))
+async def load_context(db: AsyncSession) -> Context:
+    employees = list(await db.scalars(select(Employee)))
     return Context(
-        countries={c.code: c.currency for c in db.scalars(select(Country))},
-        departments={d.name.lower(): d.id for d in db.scalars(select(Department))},
-        currencies=set(fx.supported_currencies(db)),
+        countries={c.code: c.currency for c in await db.scalars(select(Country))},
+        departments={d.name.lower(): d.id for d in await db.scalars(select(Department))},
+        currencies=set(await fx.supported_currencies(db)),
         existing={e.employee_code: e for e in employees},
         email_owner={e.email: e.employee_code for e in employees},
     )
@@ -416,15 +417,15 @@ def _jsonable(values: dict) -> dict:
     }
 
 
-def validate_job(db: Session, storage: LocalStorage, job: ImportJob) -> None:
+async def validate_job(db: AsyncSession, storage: LocalStorage, job: ImportJob) -> None:
     """Check every row and store the results in chunks, so progress is visible. Re-running
     starts over and gives the same result."""
-    db.execute(delete(ImportRow).where(ImportRow.job_id == job.id))
+    await db.execute(delete(ImportRow).where(ImportRow.job_id == job.id))
     job.processed_rows = job.total_rows = 0
     job.create_count = job.update_count = job.unchanged_count = job.error_count = 0
-    db.commit()
+    await db.commit()
 
-    data = storage.get(_file_key(job.id))
+    data = await storage.get(_file_key(job.id))
     _, rows = read_rows(file_kind(job.filename, data), data)
     rows = list(rows)
     limit = get_settings().max_import_rows
@@ -433,9 +434,9 @@ def validate_job(db: Session, storage: LocalStorage, job: ImportJob) -> None:
     if not rows:
         raise InvalidInput("The file has no data rows.")
     job.total_rows = len(rows)
-    db.commit()
+    await db.commit()
 
-    ctx = load_context(db)
+    ctx = await load_context(db)
     counts = {"create": 0, "update": 0, "unchanged": 0, "error": 0}
     for start in range(0, len(rows), CHUNK):
         for number, raw in rows[start : start + CHUNK]:
@@ -453,14 +454,14 @@ def validate_job(db: Session, storage: LocalStorage, job: ImportJob) -> None:
             )
         job.processed_rows = min(start + CHUNK, len(rows))
         job.heartbeat_at = now()
-        db.commit()
+        await db.commit()
 
     job.create_count, job.update_count = counts["create"], counts["update"]
     job.unchanged_count, job.error_count = counts["unchanged"], counts["error"]
     job.status = "validated"
-    db.commit()
+    await db.commit()
     # Raw files are not kept after checking (less personal data lying around).
-    storage.delete(_file_key(job.id))
+    await storage.delete(_file_key(job.id))
 
 
 # ---------- applying (worker) ----------
@@ -468,15 +469,15 @@ class StaleRows(Exception):
     pass
 
 
-def apply_job(db: Session, job: ImportJob) -> None:
+async def apply_job(db: AsyncSession, job: ImportJob) -> None:
     """Apply every create/update row in ONE transaction. Rows that no longer fit (the
     employee changed, or a code or email was taken after the check) stop the whole import
     with `all_or_nothing`; with `valid_rows_only` they are marked as problems and skipped."""
-    rates = fx.rates_in_use(db)
-    codes = set(db.scalars(select(Employee.employee_code)))
-    email_owner = dict(db.execute(select(Employee.email, Employee.id)).all())
+    rates = await fx.rates_in_use(db)
+    codes = set(await db.scalars(select(Employee.employee_code)))
+    email_owner = dict((await db.execute(select(Employee.email, Employee.id))).all())
     rows = list(
-        db.scalars(
+        await db.scalars(
             select(ImportRow)
             .where(ImportRow.job_id == job.id, ImportRow.action.in_(("create", "update")))
             .order_by(ImportRow.row_number)
@@ -485,7 +486,9 @@ def apply_job(db: Session, job: ImportJob) -> None:
     created = updated = 0
     for row in rows:
         payload = row.payload
-        employee = db.get(Employee, payload["employee_id"]) if row.action == "update" else None
+        employee = (
+            await db.get(Employee, payload["employee_id"]) if row.action == "update" else None
+        )
         problem = _changed_since_check(row, payload, employee, codes, email_owner)
         if problem:
             column, message = problem
@@ -498,7 +501,7 @@ def apply_job(db: Session, job: ImportJob) -> None:
             job.error_count += 1
             continue
         if employee is None:
-            employee = _create_from_row(db, job, payload, rates)
+            employee = await _create_from_row(db, job, payload, rates)
             codes.add(employee.employee_code)
             created += 1
         else:
@@ -510,8 +513,8 @@ def apply_job(db: Session, job: ImportJob) -> None:
     job.created_count, job.updated_count = created, updated
     job.status = "completed"
     job.finished_at = now()
-    cache.bump_data_version(db)
-    db.commit()
+    await cache.bump_data_version(db)
+    await db.commit()
 
 
 def _changed_since_check(
@@ -558,7 +561,9 @@ def _typed(values: dict) -> dict:
     return typed
 
 
-def _create_from_row(db: Session, job: ImportJob, payload: dict, rates: fx.Rates) -> Employee:
+async def _create_from_row(
+    db: AsyncSession, job: ImportJob, payload: dict, rates: fx.Rates
+) -> Employee:
     salary = payload["salary"]
     amount = Decimal(salary["amount"])
     employee = Employee(
@@ -571,13 +576,13 @@ def _create_from_row(db: Session, job: ImportJob, payload: dict, rates: fx.Rates
         updated_by=job.created_by,
     )
     db.add(employee)
-    db.flush()
+    await db.flush()
     db.add(_salary_record(job, employee.id, salary))
     return employee
 
 
 def _update_from_row(
-    db: Session, job: ImportJob, employee: Employee, payload: dict, rates: fx.Rates
+    db: AsyncSession, job: ImportJob, employee: Employee, payload: dict, rates: fx.Rates
 ) -> None:
     for name, value in _typed(payload["values"]).items():
         setattr(employee, name, value)
@@ -603,60 +608,62 @@ def next_job_query():
     )
 
 
-def claim_next_job(db: Session) -> ImportJob | None:
+async def claim_next_job(db: AsyncSession) -> ImportJob | None:
     """Claim one queued job."""
-    job = db.scalar(next_job_query())
+    job = await db.scalar(next_job_query())
     if job is None:
         return None
     job.status = "validating" if job.status == "queued" else "committing"
     job.started_at = job.started_at or now()
     job.heartbeat_at = now()
-    db.commit()
+    await db.commit()
     return job
 
 
-def run_job(db: Session, storage: LocalStorage, job: ImportJob) -> None:
-    step: Callable[[], None] = (
+async def run_job(db: AsyncSession, storage: LocalStorage, job: ImportJob) -> None:
+    step: Callable[[], Awaitable[None]] = (
         (lambda: validate_job(db, storage, job))
         if job.status == "validating"
         else (lambda: apply_job(db, job))
     )
     job_id = job.id
     try:
-        step()
+        await step()
     except (InvalidInput, StaleRows) as exc:
-        _fail(db, storage, job_id, str(exc))
+        await _fail(db, storage, job_id, str(exc))
     except Exception:
         log.exception("import job failed", extra={"fields": {"job_id": job_id}})
-        _fail(db, storage, job_id, "Something went wrong while processing the file. Try again.")
+        await _fail(
+            db, storage, job_id, "Something went wrong while processing the file. Try again."
+        )
 
 
-def _fail(db: Session, storage: LocalStorage, job_id: str, message: str) -> None:
-    db.rollback()
-    job = db.get(ImportJob, job_id)
+async def _fail(db: AsyncSession, storage: LocalStorage, job_id: str, message: str) -> None:
+    await db.rollback()
+    job = await db.get(ImportJob, job_id)
     job.status = "failed"
     job.error_message = message
     job.finished_at = now()
-    db.commit()
+    await db.commit()
     # A failed job is never retried (a new upload starts a new job), so drop its file.
-    storage.delete(_file_key(job_id))
+    await storage.delete(_file_key(job_id))
 
 
-def reset_stuck_jobs(db: Session) -> None:
+async def reset_stuck_jobs(db: AsyncSession) -> None:
     """Queue again the jobs whose worker went quiet (it stopped or crashed): checking
     starts over, and an interrupted apply never committed (it is one transaction). Jobs
     a live worker is still on have a recent heartbeat and are left alone."""
-    for job in db.scalars(
+    for job in await db.scalars(
         select(ImportJob).where(
             ImportJob.status.in_(("validating", "committing")),
             or_(ImportJob.heartbeat_at.is_(None), ImportJob.heartbeat_at < now() - STUCK_AFTER),
         )
     ):
         job.status = "queued" if job.status == "validating" else "commit_queued"
-    db.commit()
+    await db.commit()
 
 
-def purge_old_rows(db: Session, older_than: timedelta = timedelta(days=30)) -> None:
+async def purge_old_rows(db: AsyncSession, older_than: timedelta = timedelta(days=30)) -> None:
     old_jobs = select(ImportJob.id).where(ImportJob.finished_at < now() - older_than)
-    db.execute(delete(ImportRow).where(ImportRow.job_id.in_(old_jobs)))
-    db.commit()
+    await db.execute(delete(ImportRow).where(ImportRow.job_id.in_(old_jobs)))
+    await db.commit()
