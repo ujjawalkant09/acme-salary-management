@@ -12,7 +12,9 @@ SKILL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 REPO_ROOT=${REPO_ROOT:-$(git -C "$SKILL_DIR" rev-parse --show-toplevel)}
 CONFIG_FILE=${CONFIG_FILE:-$SKILL_DIR/config.env}
 SECRETS_ENV_FILE=${SECRETS_ENV_FILE:-$REPO_ROOT/.env}
-SECRET_NAMES=(SECRET_KEY POSTGRES_PASSWORD DEMO_ADMIN_PASSWORD DEMO_VIEWER_PASSWORD)
+# Under $PARAM_PATH. The wake code sits one level down, so the server's settings file
+# (remote-update.sh reads only the top level) never gets it.
+SECRET_NAMES=(SECRET_KEY POSTGRES_PASSWORD DEMO_ADMIN_PASSWORD DEMO_VIEWER_PASSWORD wake/WAKE_CODE)
 
 die() {
   echo "error: $*" >&2
@@ -42,6 +44,7 @@ load_config() {
   fi
   export AWS_REGION
   PARAM_PATH="/$STACK_NAME"
+  WAKE_DOMAIN="wake.$DOMAIN"
 }
 
 in_github_actions() {
@@ -181,6 +184,20 @@ godaddy() {
   local args=(-fsS --max-time 20 -X "$method" -H @- -H 'Accept: application/json')
   [[ -n "$body" ]] && args+=(-H 'Content-Type: application/json' --data "$body")
   godaddy_token | curl "${args[@]}" "https://api.godaddy.com/v1/domains/$DNS_ZONE$path"
+}
+
+# Prints "<arn> <status>" of the wake page's certificate, or "None" when there is none.
+wake_certificate() {
+  aws acm list-certificates --certificate-statuses PENDING_VALIDATION ISSUED \
+    --query "CertificateSummaryList[?DomainName=='$WAKE_DOMAIN'] | [0].[CertificateArn, Status]" --output text
+}
+
+# validation_record <certificate arn>: sets VALIDATION_NAME and VALIDATION_VALUE, the DNS record
+# that proves the domain to ACM (both end with a dot). Fails while ACM has not published it yet.
+validation_record() {
+  read -r VALIDATION_NAME VALIDATION_VALUE < <(aws acm describe-certificate --certificate-arn "$1" \
+    --query 'Certificate.DomainValidationOptions[0].ResourceRecord.[Name, Value]' --output text) || true
+  [[ -n "$VALIDATION_NAME" && "$VALIDATION_NAME" != "None" ]]
 }
 
 # acme.docrelay.in -> record "acme" in zone "docrelay.in"

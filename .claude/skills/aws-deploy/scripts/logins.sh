@@ -13,6 +13,9 @@ main() {
     aws ssm get-parameter --name "$PARAM_PATH/DEMO_${role}_PASSWORD" --with-decryption \
       --query Parameter.Value --output text
   done
+  # Share this link to let someone start the stopped demo; the code after # never reaches a server.
+  printf 'Wake link:  https://%s/#code=' "$WAKE_DOMAIN"
+  aws ssm get-parameter --name "$PARAM_PATH/wake/WAKE_CODE" --with-decryption --query Parameter.Value --output text
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

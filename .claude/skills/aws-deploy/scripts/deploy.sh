@@ -14,7 +14,8 @@ UBUNTU_AMI_PARAM=/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64
 
 apply_stack() {
   local plan=$1
-  local params=("AlertEmail=$ALERT_EMAIL" "BudgetUsd=$BUDGET_USD" "GitHubSubjectPrefix=${GITHUB_OIDC_SUBJECT_PREFIX:-}")
+  local params=("Domain=$DOMAIN" "WakeCertificateArn=${WAKE_CERTIFICATE_ARN:-}" "AlertEmail=$ALERT_EMAIL"
+    "BudgetUsd=$BUDGET_USD" "GitHubSubjectPrefix=${GITHUB_OIDC_SUBJECT_PREFIX:-}")
   # The server image is looked up once, when the stack is first created. Later runs keep it:
   # a new image id would make CloudFormation replace the server and lose its disk.
   if ! stack_exists; then
@@ -83,28 +84,64 @@ push_image() {
     --tag "$repo_uri:$tag" --push "$REPO_ROOT"
 }
 
-# Uses the GoDaddy API only when the record is wrong, so a release needs no GoDaddy token.
-ensure_dns() {
-  local ip=$1 current
-  if dns_points_to "$ip"; then
-    log "DNS: $DOMAIN already points to $ip"
+# ensure_record <type> <name in the zone> <value>: makes <name>.<zone> answer <value>.
+# Uses the GoDaddy API only when the record is wrong, so a re-run needs no GoDaddy token.
+ensure_record() {
+  local type=$1 name=$2 value=$3 fqdn="$2.$DNS_ZONE" current
+  if record_points_to "$type" "$fqdn" "$value"; then
+    log "DNS: $fqdn already points to $value"
     return
   fi
-  split_domain
-  current=$(godaddy GET "/records/A/$DNS_RECORD" | jq -r '.[0].data // empty') ||
+  current=$(godaddy GET "/records/$type/$name" | jq -r '.[0].data // empty') ||
     die "GoDaddy API call failed: check GODADDY_API and that your account has API access"
-  if [[ "$current" == "$ip" ]]; then
-    log "DNS: $DOMAIN already points to $ip"
-  else
-    log "DNS: pointing $DOMAIN to $ip"
-    godaddy PUT "/records/A/$DNS_RECORD" "[{\"data\":\"$ip\",\"ttl\":600}]" >/dev/null
+  if [[ "${current%.}" != "$value" ]]; then
+    log "DNS: pointing $fqdn to $value"
+    godaddy PUT "/records/$type/$name" "[{\"data\":\"$value\",\"ttl\":600}]" >/dev/null
   fi
-  log "Waiting for $DOMAIN to resolve to $ip"
-  retry 60 10 dns_points_to "$ip" || die "$DOMAIN does not resolve to $ip after 10 minutes"
+  log "Waiting for $fqdn to resolve to $value"
+  retry 60 10 record_points_to "$type" "$fqdn" "$value" || die "$fqdn does not resolve to $value after 10 minutes"
 }
 
-dns_points_to() {
-  [[ "$(dig +short A "$DOMAIN" @1.1.1.1 | tail -n 1)" == "$1" ]]
+# record_points_to <type> <full name> <value>, asked of a public resolver. CNAME answers end with a dot.
+record_points_to() {
+  local answer
+  answer=$(dig +short "$1" "$2" @1.1.1.1 | tail -n 1)
+  [[ "${answer%.}" == "$3" ]]
+}
+
+# A free ACM certificate for the wake page, proved by a DNS record in GoDaddy. ACM renews it
+# by itself while that record stays. Sets WAKE_CERTIFICATE_ARN.
+ensure_wake_certificate() {
+  local arn status
+  read -r arn status < <(wake_certificate) || true
+  if [[ -z "$arn" || "$arn" == "None" ]]; then
+    log "Requesting a certificate for $WAKE_DOMAIN"
+    arn=$(aws acm request-certificate --domain-name "$WAKE_DOMAIN" --validation-method DNS \
+      --idempotency-token acmewake --query CertificateArn --output text)
+    status=PENDING_VALIDATION
+  fi
+  if [[ "$status" != "ISSUED" ]]; then
+    # ACM takes a few seconds to say which record it wants.
+    retry 12 5 validation_record "$arn" || die "ACM gave no validation record for $WAKE_DOMAIN"
+    ensure_record CNAME "${VALIDATION_NAME%".$DNS_ZONE."}" "${VALIDATION_VALUE%.}"
+    log "Waiting for ACM to issue the certificate for $WAKE_DOMAIN"
+    aws acm wait certificate-validated --certificate-arn "$arn"
+  fi
+  WAKE_CERTIFICATE_ARN=$arn
+}
+
+# The stack only holds a placeholder; the wake page's code comes from wake/.
+upload_wake_code() {
+  local function_name=$1 dir status=0
+  dir=$(mktemp -d)
+  (cd "$SKILL_DIR/wake" && zip -q -X "$dir/wake.zip" index.py page.html) || status=$?
+  if ((status == 0)); then
+    log "Uploading the wake page"
+    aws lambda update-function-code --function-name "$function_name" --zip-file "fileb://$dir/wake.zip" >/dev/null &&
+      aws lambda wait function-updated --function-name "$function_name" || status=$?
+  fi
+  rm -rf "$dir"
+  return "$status"
 }
 
 release() {
@@ -113,7 +150,7 @@ release() {
   aws s3 sync --delete "$SKILL_DIR/server" "s3://$bucket/deploy/" >/dev/null
   run_remote "$instance" \
     "aws s3 sync --delete s3://$bucket/deploy/ /opt/acme/release/" \
-    "IMAGE=$image DOMAIN=$DOMAIN ACME_EMAIL=$ALERT_EMAIL PARAM_PATH=$PARAM_PATH AWS_REGION=$AWS_REGION LOG_GROUP=$log_group BUCKET=$bucket bash /opt/acme/release/remote-update.sh"
+    "IMAGE=$image DOMAIN=$DOMAIN ACME_EMAIL=$ALERT_EMAIL PARAM_PATH=$PARAM_PATH AWS_REGION=$AWS_REGION LOG_GROUP=$log_group BUCKET=$bucket AUTO_STOP_HOURS=$AUTO_STOP_HOURS bash /opt/acme/release/remote-update.sh"
 }
 
 main() {
@@ -123,7 +160,12 @@ main() {
   load_config
   require_tools aws docker jq dig curl openssl git
   check_identity
+  split_domain
   if [[ "$mode" == "--plan" ]]; then
+    # Read-only: shows the wake address only once its certificate has been issued.
+    local status
+    read -r WAKE_CERTIFICATE_ARN status < <(wake_certificate) || true
+    [[ "$status" == "ISSUED" ]] || WAKE_CERTIFICATE_ARN=""
     apply_stack plan
     return
   fi
@@ -134,8 +176,11 @@ main() {
   if [[ "$mode" == "--release" ]]; then
     stack_exists || die "nothing deployed yet; run deploy.sh from the author's laptop first"
   else
+    require_tools zip
+    ensure_wake_certificate
     apply_stack apply
     ensure_secrets
+    upload_wake_code "$(stack_output WakeFunctionName)"
   fi
   local instance ip bucket repo_uri log_group
   instance=$(stack_output InstanceId)
@@ -146,9 +191,10 @@ main() {
 
   push_image "$repo_uri" "$tag"
   if [[ "$mode" == "--release" ]]; then
-    dns_points_to "$ip" || die "$DOMAIN does not point to $ip; run deploy.sh from the author's laptop"
+    record_points_to A "$DOMAIN" "$ip" || die "$DOMAIN does not point to $ip; run deploy.sh from the author's laptop"
   else
-    ensure_dns "$ip"
+    ensure_record A "$DNS_RECORD" "$ip"
+    ensure_record CNAME "wake.$DNS_RECORD" "$(stack_output WakeTarget)"
   fi
   ensure_running "$instance"
   release "$instance" "$bucket" "$repo_uri:$tag" "$log_group"

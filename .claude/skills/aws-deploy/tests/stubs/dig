@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Fake dig for tests: answers STUB_DIG_IP_BEFORE until the fake GoDaddy PUT has run, then STUB_DIG_IP.
-if [[ -n "${STUB_DIG_IP_BEFORE:-}" && ! -e "$STUB_LOG.dns_put" ]]; then
+# Fake dig for tests. A records: STUB_DIG_IP_BEFORE until the fake GoDaddy PUT has run, then STUB_DIG_IP.
+# CNAME records: STUB_DIG_CNAME (default: the wake target) until a CNAME PUT, then the value that was PUT.
+if [[ "$*" == *CNAME* ]]; then
+  if [[ -s "$STUB_LOG.cname_put" ]]; then
+    echo "$(jq -r '.[0].data' "$STUB_LOG.cname_put")."
+  else
+    echo "${STUB_DIG_CNAME-d-abc.execute-api.ap-south-1.amazonaws.com.}"
+  fi
+elif [[ -n "${STUB_DIG_IP_BEFORE:-}" && ! -e "$STUB_LOG.dns_put" ]]; then
   echo "$STUB_DIG_IP_BEFORE"
 else
   echo "${STUB_DIG_IP:-203.0.113.10}"

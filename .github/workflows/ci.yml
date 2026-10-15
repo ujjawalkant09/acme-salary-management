@@ -65,6 +65,8 @@ jobs:
       - run: uvx --from shellcheck-py shellcheck scripts/*.sh server/*.sh tests/stubs/*
       - run: uvx cfn-lint infra/stack.yml
       - run: npx --yes bats@1.11.1 tests
+      - run: uvx ruff check wake tests && uvx ruff format --check wake tests
+      - run: uvx --with boto3 pytest -q tests/test_wake.py
 
   # Fails if any commit adds a key or password. Known test-only values are in .gitleaksignore.
   secret-scan:

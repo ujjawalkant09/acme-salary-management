@@ -9,6 +9,11 @@ for arg in "$@"; do
     # shellcheck disable=SC2012  # test-only path we created; ls gives the mode string
     echo "${arg#file://} $(ls -ld "$(dirname "${arg#file://}")" | cut -c1-10)" >>"$STUB_STDIN_LOG.files"
   fi
+  # Uploaded zips (--zip-file fileb://...): keep the file names inside and the zip's path.
+  if [[ "$arg" == fileb://* ]]; then
+    unzip -Z1 "${arg#fileb://}" >>"$STUB_LOG.zip"
+    echo "${arg#fileb://}" >>"$STUB_LOG.zip.path"
+  fi
 done
 [[ -n "${STUB_FAIL:-}" && "$1 $2" == "$STUB_FAIL" ]] && exit 254
 case "$1 $2" in
@@ -19,12 +24,17 @@ case "$1 $2" in
       *InstanceId*) echo i-0abc ;;
       *PublicIp*) echo 203.0.113.10 ;;
       *BucketName*) echo acme-bucket ;;
+      *WakeFunctionName*) echo acme-salary-WakeFunction ;;
+      *WakeTarget*) echo d-abc.execute-api.ap-south-1.amazonaws.com ;;
     esac
     ;;
   "ec2 describe-instances") echo "${STUB_STATE:-running}" ;;
   "ssm describe-instance-information") echo Online ;;
   "ssm get-parameters") echo "${STUB_MISSING:-None}" ;;
   "ssm send-command") echo cmd-1 ;;
+  "acm list-certificates") printf '%s\n' "${STUB_CERT:-arn:aws:acm:ap-south-1:123456789012:certificate/old	ISSUED}" ;;
+  "acm request-certificate") echo arn:aws:acm:ap-south-1:123456789012:certificate/new ;;
+  "acm describe-certificate") printf '%s\n' "${STUB_VALIDATION:-_v1.wake.acme.docrelay.in.	_t1.acm-validations.aws.}" ;;
   "ssm get-command-invocation")
     if [[ "$*" == *"--query Status"* ]]; then echo "${STUB_REMOTE_STATUS:-Success}"; else echo "remote output"; fi
     ;;

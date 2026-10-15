@@ -3,7 +3,7 @@
 # Writes the settings file from SSM, pulls the new image, runs migrations and swaps the
 # containers. If the app does not become healthy it goes back to the previous image.
 set -euo pipefail
-: "${IMAGE:?}" "${DOMAIN:?}" "${ACME_EMAIL:?}" "${PARAM_PATH:?}" "${AWS_REGION:?}" "${LOG_GROUP:?}" "${BUCKET:?}"
+: "${IMAGE:?}" "${DOMAIN:?}" "${ACME_EMAIL:?}" "${PARAM_PATH:?}" "${AWS_REGION:?}" "${LOG_GROUP:?}" "${BUCKET:?}" "${AUTO_STOP_HOURS:?}"
 # shellcheck source=compose.sh
 . "$(dirname "$0")/compose.sh"
 
@@ -56,5 +56,7 @@ fi
 
 # Nightly backup at 03:00 India time (21:30 UTC).
 echo "30 21 * * * root bash $APP_DIR/release/backup.sh >> /var/log/acme-backup.log 2>&1" >/etc/cron.d/acme-backup
+# Every boot schedules the auto-stop, also when the wake page started the server.
+bash "$(dirname "$0")/boot-auto-stop.sh" "$AUTO_STOP_HOURS"
 docker image prune -af --filter until=72h >/dev/null
 echo "Running $IMAGE"

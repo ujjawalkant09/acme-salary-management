@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake systemctl for tests: records the call.
+echo "systemctl $*" >>"$STUB_LOG"

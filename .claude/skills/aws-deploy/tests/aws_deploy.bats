@@ -125,7 +125,7 @@ line_of() {
 }
 
 @test "dns: a wrong record is updated and the token never appears in command arguments" {
-  STUB_DIG_IP_BEFORE=198.51.100.1 STUB_CURL_OUT='[{"data":"198.51.100.1"}]' in_deploy "ensure_dns 203.0.113.10"
+  STUB_DIG_IP_BEFORE=198.51.100.1 STUB_CURL_OUT='[{"data":"198.51.100.1"}]' in_deploy "split_domain && ensure_record A acme 203.0.113.10"
   [ "$status" -eq 0 ]
   grep -q -- "-X PUT .*records/A/acme" "$STUB_LOG"
   grep -q '"data":"203.0.113.10"' "$STUB_LOG"
@@ -135,10 +135,32 @@ line_of() {
 
 @test "dns: a record that already resolves is left alone without calling GoDaddy" {
   rm "$SECRETS_ENV_FILE"
-  in_deploy "ensure_dns 203.0.113.10"
+  in_deploy "split_domain && ensure_record A acme 203.0.113.10"
   [ "$status" -eq 0 ]
   not_in "curl" "$STUB_LOG"
   [[ "$output" == *"already points to"* ]]
+}
+
+@test "dns: a missing CNAME is created with the value and no trailing dot" {
+  STUB_DIG_CNAME= in_deploy "split_domain && ensure_record CNAME wake.acme d-abc.execute-api.ap-south-1.amazonaws.com"
+  [ "$status" -eq 0 ]
+  grep -q -- "-X PUT .*records/CNAME/wake.acme" "$STUB_LOG"
+  grep -q '"data":"d-abc.execute-api.ap-south-1.amazonaws.com"' "$STUB_LOG"
+}
+
+@test "dns: a CNAME that already resolves (answer ends with a dot) is left alone" {
+  rm "$SECRETS_ENV_FILE"
+  in_deploy "split_domain && ensure_record CNAME wake.acme d-abc.execute-api.ap-south-1.amazonaws.com"
+  [ "$status" -eq 0 ]
+  not_in "curl" "$STUB_LOG"
+  [[ "$output" == *"wake.acme.docrelay.in already points to"* ]]
+}
+
+@test "dns: a GoDaddy record that is right but not yet visible is not written again" {
+  STUB_DIG_CNAME= STUB_CURL_OUT='[{"data":"d-abc.execute-api.ap-south-1.amazonaws.com."}]' \
+    in_deploy "split_domain && retry() { return 0; } && ensure_record CNAME wake.acme d-abc.execute-api.ap-south-1.amazonaws.com"
+  [ "$status" -eq 0 ]
+  not_in "-X PUT" "$STUB_LOG"
 }
 
 @test "dns: a bare domain without a subdomain is rejected" {
@@ -178,6 +200,14 @@ line_of() {
   [ ! -e "$(dirname "$path")" ]
 }
 
+@test "secrets: the wake code is a secret one level below the server's settings" {
+  STUB_MISSING="/acme-salary/wake/WAKE_CODE" in_deploy "ensure_secrets"
+  [ "$status" -eq 0 ]
+  grep -q "/acme-salary/wake/WAKE_CODE" "$STUB_LOG"
+  [ "$(jq -r .Name "$STUB_STDIN_LOG")" = "/acme-salary/wake/WAKE_CODE" ]
+  [ "$(jq -r '.Value | length' "$STUB_STDIN_LOG")" -eq 64 ]
+}
+
 @test "secrets: re-running with every secret present changes nothing" {
   STUB_MISSING=None in_deploy "ensure_secrets"
   [ "$status" -eq 0 ]
@@ -197,6 +227,44 @@ line_of() {
   in_deploy "apply_stack apply"
   [ "$status" -eq 0 ]
   grep -qE "GitHubSubjectPrefix=( |$)" "$STUB_LOG"
+}
+
+@test "deploy: the stack gets the domain and the wake certificate" {
+  in_deploy "WAKE_CERTIFICATE_ARN=arn:cert && apply_stack apply"
+  [ "$status" -eq 0 ]
+  grep -q "Domain=acme.docrelay.in" "$STUB_LOG"
+  grep -q "WakeCertificateArn=arn:cert" "$STUB_LOG"
+}
+
+@test "deploy: requests the certificate before the stack, uploads the wake page and points wake.<domain> at it" {
+  STUB_CERT=None STUB_DIG_CNAME= REPO_ROOT=$(release_repo) run "$SKILL/scripts/deploy.sh"
+  [ "$status" -eq 0 ]
+  local cert stack upload wake_dns
+  cert=$(line_of "acm wait certificate-validated")
+  stack=$(line_of "cloudformation deploy")
+  upload=$(line_of "lambda update-function-code")
+  wake_dns=$(line_of "records/CNAME/wake.acme")
+  [ "$cert" -lt "$stack" ]
+  [ "$stack" -lt "$upload" ]
+  [ -n "$wake_dns" ]
+  grep -q "WakeCertificateArn=arn:aws:acm:ap-south-1:123456789012:certificate/new" "$STUB_LOG"
+  [ "$(jq -r '.[0].data' "$STUB_LOG.cname_put")" = "d-abc.execute-api.ap-south-1.amazonaws.com" ]
+}
+
+@test "plan: an issued wake certificate goes to the plan and nothing is requested or changed" {
+  run "$SKILL/scripts/deploy.sh" --plan
+  [ "$status" -eq 0 ]
+  grep -q -- "--no-execute-changeset" "$STUB_LOG"
+  grep -q "WakeCertificateArn=arn:aws:acm:ap-south-1:123456789012:certificate/old" "$STUB_LOG"
+  not_in "request-certificate" "$STUB_LOG"
+  not_in "curl" "$STUB_LOG"
+}
+
+@test "plan: a certificate that is not issued yet is left out" {
+  STUB_CERT="arn:aws:acm:ap-south-1:123456789012:certificate/new	PENDING_VALIDATION" run "$SKILL/scripts/deploy.sh" --plan
+  [ "$status" -eq 0 ]
+  grep -qE "WakeCertificateArn=( |$)" "$STUB_LOG"
+  not_in "acm wait" "$STUB_LOG"
 }
 
 @test "deploy: an unknown option is rejected" {
@@ -243,8 +311,10 @@ release_repo() {
   not_in "cloudformation deploy" "$STUB_LOG"
   not_in "put-parameter" "$STUB_LOG"
   not_in "api.godaddy.com" "$STUB_LOG"
-  grep -q "remote-update.sh" "$STUB_LOG"
+  grep -q "AUTO_STOP_HOURS=4 bash /opt/acme/release/remote-update.sh" "$STUB_LOG"
   grep -q "auto-stop.sh 4" "$STUB_LOG"
+  not_in "acm " "$STUB_LOG"
+  not_in "lambda " "$STUB_LOG"
 }
 
 @test "release: a stopped server is started first" {
@@ -268,6 +338,86 @@ release_repo() {
   STUB_NO_STACK=1 REPO_ROOT=$(release_repo) run "$SKILL/scripts/deploy.sh" --release
   [ "$status" -eq 1 ]
   [[ "$output" == *"run deploy.sh from the author's laptop first"* ]]
+}
+
+# --- wake page ---
+
+@test "certificate: an issued one is reused without a new request or DNS change" {
+  rm "$SECRETS_ENV_FILE"
+  in_deploy 'split_domain && ensure_wake_certificate && echo "arn=$WAKE_CERTIFICATE_ARN"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"arn=arn:aws:acm:ap-south-1:123456789012:certificate/old"* ]]
+  not_in "request-certificate" "$STUB_LOG"
+  not_in "acm wait" "$STUB_LOG"
+  not_in "curl" "$STUB_LOG"
+}
+
+@test "certificate: a missing one is requested for wake.<domain>, proved in GoDaddy, then waited for" {
+  STUB_CERT=None in_deploy 'split_domain && ensure_wake_certificate && echo "arn=$WAKE_CERTIFICATE_ARN"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"arn=arn:aws:acm:ap-south-1:123456789012:certificate/new"* ]]
+  grep -q "acm request-certificate --domain-name wake.acme.docrelay.in --validation-method DNS" "$STUB_LOG"
+  grep -q -- "-X PUT .*records/CNAME/_v1.wake.acme$" "$STUB_LOG"
+  [ "$(jq -r '.[0].data' "$STUB_LOG.cname_put")" = "_t1.acm-validations.aws" ]
+  [ "$(line_of "records/CNAME/_v1")" -lt "$(line_of "acm wait certificate-validated")" ]
+}
+
+@test "certificate: a pending one is not requested again" {
+  STUB_CERT="arn:aws:acm:ap-south-1:123456789012:certificate/pending	PENDING_VALIDATION" \
+    in_deploy 'split_domain && ensure_wake_certificate && echo "arn=$WAKE_CERTIFICATE_ARN"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"arn=arn:aws:acm:ap-south-1:123456789012:certificate/pending"* ]]
+  not_in "request-certificate" "$STUB_LOG"
+  grep -q "acm wait certificate-validated --certificate-arn arn:aws:acm:ap-south-1:123456789012:certificate/pending" "$STUB_LOG"
+}
+
+@test "certificate: no validation record from ACM stops the deploy" {
+  STUB_CERT=None STUB_VALIDATION="None	None" in_deploy "split_domain && ensure_wake_certificate"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ACM gave no validation record"* ]]
+  not_in "acm wait" "$STUB_LOG"
+}
+
+@test "wake: the page code is zipped and uploaded to the function, and the zip is deleted" {
+  in_deploy "upload_wake_code acme-salary-WakeFunction"
+  [ "$status" -eq 0 ]
+  grep -q "lambda update-function-code --function-name acme-salary-WakeFunction --zip-file fileb://" "$STUB_LOG"
+  grep -q "lambda wait function-updated --function-name acme-salary-WakeFunction" "$STUB_LOG"
+  [ "$(sort "$STUB_LOG.zip" | tr '\n' ' ')" = "index.py page.html " ]
+  [ ! -e "$(dirname "$(cat "$STUB_LOG.zip.path")")" ]
+}
+
+@test "wake: a failed upload still deletes the zip" {
+  STUB_FAIL="lambda update-function-code" in_deploy "upload_wake_code acme-salary-WakeFunction"
+  [ "$status" -ne 0 ]
+  [ ! -e "$(dirname "$(cat "$STUB_LOG.zip.path")")" ]
+  not_in "lambda wait" "$STUB_LOG"
+}
+
+@test "boot auto-stop: every boot runs auto-stop.sh with the hours, before the SSM agent" {
+  UNIT_DIR="$BATS_TEST_TMPDIR" run "$SKILL/server/boot-auto-stop.sh" 3
+  [ "$status" -eq 0 ]
+  local unit="$BATS_TEST_TMPDIR/acme-autostop-on-boot.service"
+  grep -qx "ExecStart=/bin/bash /opt/acme/release/auto-stop.sh 3" "$unit"
+  grep -qx "Before=snap.amazon-ssm-agent.amazon-ssm-agent.service" "$unit"
+  grep -qx "WantedBy=multi-user.target" "$unit"
+  [ "$(line_of "systemctl daemon-reload")" -lt "$(line_of "systemctl enable --quiet acme-autostop-on-boot.service")" ]
+}
+
+@test "boot auto-stop: running it again replaces the hours" {
+  UNIT_DIR="$BATS_TEST_TMPDIR" run "$SKILL/server/boot-auto-stop.sh" 3
+  UNIT_DIR="$BATS_TEST_TMPDIR" run "$SKILL/server/boot-auto-stop.sh" 0
+  [ "$status" -eq 0 ]
+  [ "$(grep -c ExecStart "$BATS_TEST_TMPDIR/acme-autostop-on-boot.service")" -eq 1 ]
+  grep -qx "ExecStart=/bin/bash /opt/acme/release/auto-stop.sh 0" "$BATS_TEST_TMPDIR/acme-autostop-on-boot.service"
+}
+
+@test "boot auto-stop: hours must be a whole number and nothing is installed" {
+  UNIT_DIR="$BATS_TEST_TMPDIR" run "$SKILL/server/boot-auto-stop.sh" 2h
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"whole number"* ]]
+  [ ! -e "$BATS_TEST_TMPDIR/acme-autostop-on-boot.service" ]
+  not_in "systemctl" "$STUB_LOG"
 }
 
 # --- server on/off ---
