@@ -29,7 +29,7 @@ const PAGE_SIZE = 20
 export default function PeoplePage() {
   const [search, setSearch] = useSearchParams()
   const params = useMemo(() => parsePeopleParams(search), [search])
-  const [showFilters, setShowFilters] = useState(true)
+  const [showFilters, setShowFilters] = useState(false)
   const [mobileFilters, setMobileFilters] = useState(false)
   const meta = useMeta()
 
