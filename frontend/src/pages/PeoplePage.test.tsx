@@ -126,11 +126,16 @@ describe('People filters', () => {
     expect(screen.queryByText('Country AU')).toBeNull()
   })
 
-  it('the filter panel can be hidden, and opened as a drawer on phones', async () => {
+  it('the filter panel starts hidden, can be shown and hidden again, and opens as a drawer on phones', async () => {
     const { user } = setup('/people?country=IN&level=3')
     await screen.findByText('Asha Verma')
-    await user.click(screen.getByRole('button', { name: 'Hide filters' }))
+    const panel = screen.getByRole('complementary', { name: 'Filters' })
+    expect(panel).toHaveClass('md:hidden')
     expect(screen.getByRole('button', { name: 'Show filters' })).toHaveAttribute('aria-pressed', 'false')
+    await user.click(screen.getByRole('button', { name: 'Show filters' }))
+    expect(panel).not.toHaveClass('md:hidden')
+    await user.click(screen.getByRole('button', { name: 'Hide filters' }))
+    expect(panel).toHaveClass('md:hidden')
     await user.click(screen.getByRole('button', { name: 'Filters (2)' }))
     expect(screen.getByRole('complementary', { name: 'Filters' })).not.toHaveClass('max-md:hidden')
     await user.click(screen.getByRole('button', { name: 'Close filters' }))

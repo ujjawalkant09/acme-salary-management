@@ -80,6 +80,7 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Employee details on their **own page** (/people/<id>); Back returns to the filtered list | Q39 | Room for history and documents; shareable link |
 | Left sidebar with signed-in user; calm Home; left filter panel with counts and chips; Insights in tabs | UI research (design/07) | Feedback that v2 was crowded |
 | No dark mode; each country's own number format (₹18,40,000 / R$ 202.500 / $64,500) | Author | |
+| The People filter panel starts **hidden**; "Show filters" opens it (not remembered between visits) | Author | The table gets the full width on first view; the chips above the table still show any active filters |
 
 ## Technical and delivery
 | Decision | Why |
