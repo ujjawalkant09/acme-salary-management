@@ -26,6 +26,7 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.17.0",
 ]
 
@@ -48,6 +49,18 @@ filterwarnings = [
     "error:coroutine .* was never awaited:RuntimeWarning",
     "error::pytest.PytestUnraisableExceptionWarning",
 ]
+
+[tool.coverage.run]
+source = ["app", "scripts"]
+branch = true
+# Async SQLAlchemy switches greenlets under the hood; without this, coverage loses track and
+# reports code the tests do run (mark-left, insights, ...) as never run.
+concurrency = ["greenlet", "thread"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 98
 
 [tool.ruff.lint.isort]
 known-third-party = ["alembic"]

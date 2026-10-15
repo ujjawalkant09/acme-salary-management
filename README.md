@@ -44,10 +44,10 @@ From GitHub: **Actions > Deploy > Run workflow** runs every check and releases `
 
 ## Checks
 ```bash
-cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest
-cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build
+cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest --cov
+cd frontend && npm run lint && npm run typecheck && npm run coverage && npm run build
 ```
-Coverage reports: `cd backend && uv run --with pytest-cov pytest --cov=app --cov=scripts --cov-report=term-missing` and `cd frontend && npm run coverage`.
+Both test runs print a coverage report and fail if coverage drops below the floor (backend 98%, set in `pyproject.toml`; frontend in `vite.config.ts`). Plain `uv run pytest` / `npm test` run the tests without it.
 CI (`.github/workflows/ci.yml`) runs these on every push, plus the deploy-script tests, a secret scan and the production image against Postgres.
 
 **As-user oracles** (`e2e/`): real-browser checks of the running app (sign-in, People, salary changes including a retried save and two admins at once), each scenario GREEN, RED or SKIP. CI runs them against the production image. To run them locally, see [e2e/README.md](e2e/README.md):
