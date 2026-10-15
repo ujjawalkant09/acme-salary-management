@@ -1,6 +1,7 @@
 import random
 import time
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from alembic import command
@@ -35,6 +36,10 @@ def test_generated_data_is_consistent():
         in_effect = [r for r in history if r["effective_date"] <= AS_OF]
         assert in_effect[-1]["amount"] == e["current_salary"]
         assert all(r["amount"] > 0 for r in history)
+        # Money stays Decimal end to end, rounded to the country's step.
+        step = seed_script.COUNTRIES[e["country_code"]][3]
+        assert all(type(r["amount"]) is Decimal and r["amount"] % step == 0 for r in history)
+        assert type(e["current_salary_usd"]) is Decimal
         if e["status"] == "left":
             assert e["hire_date"] < e["left_on"] <= AS_OF
             assert all(r["effective_date"] <= e["left_on"] for r in history)
