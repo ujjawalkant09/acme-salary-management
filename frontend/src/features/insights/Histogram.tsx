@@ -23,18 +23,7 @@ export default function Histogram({ data }: { data: Distribution }) {
             minTickGap={24}
           />
           <YAxis allowDecimals={false} width={36} tick={{ fontSize: 11, fill: 'var(--color-muted)' }} tickLine={false} axisLine={false} />
-          <Tooltip
-            cursor={{ fill: 'var(--color-subtle)' }}
-            content={({ active, payload }) => {
-              const bin = active ? payload?.[0]?.payload : null
-              if (!bin) return null
-              return (
-                <div className="rounded-md border border-border bg-background px-2.5 py-1.5 text-sm shadow-sm">
-                  {money(bin.start, data.currency)} to {money(bin.end, data.currency)}: {count(bin.count)} people
-                </div>
-              )
-            }}
-          />
+          <Tooltip cursor={{ fill: 'var(--color-subtle)' }} content={<BinTooltip currency={data.currency} />} />
           <Bar dataKey="count" radius={[3, 3, 0, 0]} isAnimationActive={false}>
             {rows.map((row, i) => (
               <Cell key={row.start} fill={i === medianIndex ? 'var(--color-primary)' : 'var(--color-band)'} />
@@ -46,12 +35,22 @@ export default function Histogram({ data }: { data: Distribution }) {
   )
 }
 
-/** The bracket holding the median, drawn in the primary colour like the pay band's median tick. */
+type Bin = Distribution['bins'][number]
+
+/** Recharts fills in `active` and `payload` (the hovered bin) when it shows the tooltip. */
+export function BinTooltip({ currency, active, payload }: { currency: string; active?: boolean; payload?: readonly { payload?: Bin }[] }) {
+  const bin = active ? payload?.[0]?.payload : undefined
+  if (!bin) return null
+  return (
+    <div className="rounded-md border border-border bg-background px-2.5 py-1.5 text-sm shadow-sm">
+      {money(bin.start, currency)} to {money(bin.end, currency)}: {count(bin.count)} people
+    </div>
+  )
+}
+
+/** The bracket holding the median, drawn in the primary colour like the pay band's median tick.
+ *  Needs `total > 0`, so the running count always reaches half of it. */
 function medianBin(counts: number[], total: number): number {
   let running = 0
-  for (const [i, n] of counts.entries()) {
-    running += n
-    if (running >= total / 2) return i
-  }
-  return counts.length - 1
+  return counts.findIndex((n) => (running += n) >= total / 2)
 }
