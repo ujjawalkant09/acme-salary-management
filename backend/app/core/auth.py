@@ -8,7 +8,7 @@ from typing import Annotated
 
 import bcrypt
 from fastapi import Depends, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.core.errors import Forbidden, Unauthorized
@@ -22,12 +22,13 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    """Slow on purpose (bcrypt): call it with `asyncio.to_thread` from async code."""
     return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
-def get_current_user(request: Request, db: Annotated[Session, Depends(get_db)]) -> User:
+async def get_current_user(request: Request, db: Annotated[AsyncSession, Depends(get_db)]) -> User:
     user_id = request.session.get(SESSION_USER_KEY)
-    user = db.get(User, user_id) if user_id else None
+    user = await db.get(User, user_id) if user_id else None
     if user is None or not user.active:
         request.session.clear()
         raise Unauthorized("Please sign in.")
@@ -35,7 +36,7 @@ def get_current_user(request: Request, db: Annotated[Session, Depends(get_db)]) 
     return user
 
 
-def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
+async def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
     if not user.is_admin:
         raise Forbidden("Only HR Admins can change data. Your account can view only.")
     return user
@@ -43,4 +44,4 @@ def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 AdminUser = Annotated[User, Depends(require_admin)]
-DB = Annotated[Session, Depends(get_db)]
+DB = Annotated[AsyncSession, Depends(get_db)]

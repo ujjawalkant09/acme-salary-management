@@ -11,7 +11,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
 from app.core.clock import today
@@ -56,7 +56,7 @@ class Outlier:
     peers: Spread
 
 
-def _active_rows(db: Session) -> list[Row]:
+async def _active_rows(db: AsyncSession) -> list[Row]:
     query = (
         select(
             Employee.id,
@@ -90,16 +90,16 @@ def _active_rows(db: Session) -> list[Row]:
             salary_usd=r[11],
             fte_salary_usd=r[11] / r[10],
         )
-        for r in db.execute(query)
+        for r in await db.execute(query)
     ]
 
 
-def outliers(db: Session) -> dict[int, Outlier]:
+async def outliers(db: AsyncSession) -> dict[int, Outlier]:
     """Everyone paid outside 1.5 × IQR of their peers (same role, level, country, currency)."""
 
-    def build() -> dict[int, Outlier]:
+    async def build() -> dict[int, Outlier]:
         groups: dict[tuple, list[Row]] = defaultdict(list)
-        for row in _active_rows(db):
+        for row in await _active_rows(db):
             groups[row.peer_key].append(row)
         found = {}
         for rows in groups.values():
@@ -109,23 +109,24 @@ def outliers(db: Session) -> dict[int, Outlier]:
                     found[row.id] = Outlier(row, peers)
         return found
 
-    return cache.get_or_build(db, "outliers", {}, build)
+    return await cache.get_or_build(db, "outliers", {}, build)
 
 
-def outlier_ids(db: Session, country: str | None = None) -> list[int]:
-    return [i for i, o in outliers(db).items() if country is None or o.row.country_code == country]
+async def outlier_ids(db: AsyncSession, country: str | None = None) -> list[int]:
+    found = await outliers(db)
+    return [i for i, o in found.items() if country is None or o.row.country_code == country]
 
 
-def summary(db: Session) -> Summary:
-    rows = _active_rows(db)
+async def summary(db: AsyncSession) -> Summary:
+    rows = await _active_rows(db)
     start = today()
     return Summary(
         headcount=len(rows),
         payroll_usd=sum((r.salary_usd for r in rows), Decimal(0)),
         median_salary_usd=median([r.fte_salary_usd for r in rows]) if rows else Decimal(0),
-        rates_date=fx.rates_in_use(db).rates_date,
-        outlier_count=len(outliers(db)),
-        upcoming_changes_7d=repo.count_upcoming_changes(db, start, start + timedelta(days=7)),
+        rates_date=(await fx.rates_in_use(db)).rates_date,
+        outlier_count=len(await outliers(db)),
+        upcoming_changes_7d=await repo.count_upcoming_changes(db, start, start + timedelta(days=7)),
         countries=len({r.country_code for r in rows}),
     )
 
@@ -146,13 +147,13 @@ def _group(key: str, label: str, values: list[Decimal], costs: list[Decimal], cu
     )
 
 
-def by_country(db: Session) -> GroupStatsOut:
+async def by_country(db: AsyncSession) -> GroupStatsOut:
     """Per country in its own currency (people paid in another currency are converted
     through USD), plus the median and cost in USD for comparison."""
-    rates = fx.rates_in_use(db)
-    countries = {c.code: c for c in db.scalars(select(Country))}
+    rates = await fx.rates_in_use(db)
+    countries = {c.code: c for c in await db.scalars(select(Country))}
     grouped: dict[str, list[Row]] = defaultdict(list)
-    for row in _active_rows(db):
+    for row in await _active_rows(db):
         grouped[row.country_code].append(row)
     groups = []
     for code, rows in sorted(grouped.items()):
@@ -171,9 +172,9 @@ def by_country(db: Session) -> GroupStatsOut:
     return GroupStatsOut(rates_date=rates.rates_date, groups=groups)
 
 
-def by_department(db: Session) -> GroupStatsOut:
+async def by_department(db: AsyncSession) -> GroupStatsOut:
     grouped: dict[str, list[Row]] = defaultdict(list)
-    for row in _active_rows(db):
+    for row in await _active_rows(db):
         grouped[row.department].append(row)
     groups = [
         _group(
@@ -185,17 +186,17 @@ def by_department(db: Session) -> GroupStatsOut:
         )
         for name, rows in sorted(grouped.items())
     ]
-    return GroupStatsOut(rates_date=fx.rates_in_use(db).rates_date, groups=groups)
+    return GroupStatsOut(rates_date=(await fx.rates_in_use(db)).rates_date, groups=groups)
 
 
-def by_role(db: Session, country_code: str) -> GroupStatsOut:
+async def by_role(db: AsyncSession, country_code: str) -> GroupStatsOut:
     """Each role and level within one country, in that country's currency."""
-    rates = fx.rates_in_use(db)
-    country = db.get(Country, country_code)
+    rates = await fx.rates_in_use(db)
+    country = await db.get(Country, country_code)
     rate = rates.usd_per_unit[country.currency]
-    flagged = outliers(db)
+    flagged = await outliers(db)
     grouped: dict[tuple[str, int], list[Row]] = defaultdict(list)
-    for row in _active_rows(db):
+    for row in await _active_rows(db):
         if row.country_code == country_code:
             grouped[(row.job_title, row.job_level)].append(row)
     groups = []
@@ -213,13 +214,13 @@ def by_role(db: Session, country_code: str) -> GroupStatsOut:
     return GroupStatsOut(rates_date=rates.rates_date, groups=groups)
 
 
-def distribution(db: Session, country_code: str | None, bins: int) -> DistributionOut:
-    rows = [r for r in _active_rows(db) if country_code in (None, r.country_code)]
+async def distribution(db: AsyncSession, country_code: str | None, bins: int) -> DistributionOut:
+    rows = [r for r in await _active_rows(db) if country_code in (None, r.country_code)]
     if country_code is None:
         values, currency = [r.fte_salary_usd for r in rows], "USD"
     else:
-        currency = db.get(Country, country_code).currency
-        rate = fx.rates_in_use(db).usd_per_unit[currency]
+        currency = (await db.get(Country, country_code)).currency
+        rate = (await fx.rates_in_use(db)).usd_per_unit[currency]
         values = [r.fte_salary_usd / rate for r in rows]
     return DistributionOut(
         currency=currency,
@@ -227,11 +228,11 @@ def distribution(db: Session, country_code: str | None, bins: int) -> Distributi
     )
 
 
-def outlier_page(
-    db: Session, country_code: str | None, page: int, page_size: int
+async def outlier_page(
+    db: AsyncSession, country_code: str | None, page: int, page_size: int
 ) -> Page[OutlierOut]:
     items = []
-    for o in outliers(db).values():
+    for o in (await outliers(db)).values():
         if country_code not in (None, o.row.country_code):
             continue
         diff = pct_diff(o.row.fte_salary, o.peers.median)

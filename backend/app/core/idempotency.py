@@ -11,7 +11,7 @@ runs twice.
 import hashlib
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Annotated, Any
 
@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import as_utc, now
 from app.core.errors import Conflict, InvalidInput
@@ -41,13 +41,13 @@ def request_hash(body: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def run(
-    db: Session,
+async def run(
+    db: AsyncSession,
     user: User,
     key: str | None,
     endpoint: str,
     body: Any,
-    work: Callable[[], Any],
+    work: Callable[[], Awaitable[Any]],
     status_code: int = 200,
 ) -> JSONResponse:
     """Run `work` (a service call that commits) at most once per key.
@@ -55,32 +55,34 @@ def run(
     Without a key the work simply runs.
     """
     if key is None:
-        return JSONResponse(jsonable_encoder(work()), status_code=status_code)
+        return JSONResponse(jsonable_encoder(await work()), status_code=status_code)
     if not key.strip():
         raise InvalidInput("The Idempotency-Key header must not be empty.")
 
     body_hash = request_hash(body)
-    existing = db.get(IdempotencyKey, (key, user.id))
+    # Read now: a rollback below expires `user`, and an async session can't reload it.
+    user_id = user.id
+    existing = await db.get(IdempotencyKey, (key, user_id))
     if existing is not None and as_utc(existing.expires_at) > now():
         return _replay(existing, endpoint, body_hash)
     if existing is not None:
-        db.delete(existing)
-        db.flush()
+        await db.delete(existing)
+        await db.flush()
 
     record = IdempotencyKey(
         key=key,
-        user_id=user.id,
+        user_id=user_id,
         endpoint=endpoint,
         request_hash=body_hash,
         expires_at=now() + KEY_LIFETIME,
     )
     db.add(record)
     try:
-        result = jsonable_encoder(work())
+        result = jsonable_encoder(await work())
     except IntegrityError:
         # Another request with the same key committed first.
-        db.rollback()
-        existing = db.get(IdempotencyKey, (key, user.id))
+        await db.rollback()
+        existing = await db.get(IdempotencyKey, (key, user_id))
         if existing is None:
             raise
         return _replay(existing, endpoint, body_hash)
@@ -88,12 +90,12 @@ def run(
     record.status_code = status_code
     record.response_body = result
     try:
-        db.commit()
+        await db.commit()
     except SQLAlchemyError:
         # The work is already saved; only the stored copy of the response is lost. The
         # caller still gets the real result, and a retry gets 409 "already processed"
         # (never a second change).
-        db.rollback()
+        await db.rollback()
         log.warning(
             "could not store the idempotent response", extra={"fields": {"endpoint": endpoint}}
         )
@@ -114,7 +116,7 @@ def _replay(existing: IdempotencyKey, endpoint: str, body_hash: str) -> JSONResp
     return JSONResponse(existing.response_body, status_code=existing.status_code)
 
 
-def purge_expired(db: Session) -> int:
-    result = db.execute(delete(IdempotencyKey).where(IdempotencyKey.expires_at < now()))
-    db.commit()
+async def purge_expired(db: AsyncSession) -> int:
+    result = await db.execute(delete(IdempotencyKey).where(IdempotencyKey.expires_at < now()))
+    await db.commit()
     return result.rowcount

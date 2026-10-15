@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "ACME Pay: salary management API"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "alembic>=1.20.0",
     "bcrypt>=5.0.0",
     "cachetools>=7.2.1",
@@ -17,13 +18,14 @@ dependencies = [
     "pydantic[email]>=2.14.1",
     "python-multipart>=0.0.32",
     "slowapi>=0.1.10",
-    "sqlalchemy>=2",
+    "sqlalchemy[asyncio]>=2",
     "uvicorn[standard]>=0.54.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.17.0",
 ]
 
@@ -37,7 +39,15 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
+# `async def` tests and fixtures run on an event loop without a marker on each one.
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient`",
+    # A forgotten `await` only warns (from garbage collection, which pytest reports as an
+    # "unraisable exception"); fail the test instead.
+    "error:coroutine .* was never awaited:RuntimeWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.ruff.lint.isort]
 known-third-party = ["alembic"]

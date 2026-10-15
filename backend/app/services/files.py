@@ -5,13 +5,14 @@ row; if the database write fails, delete the file. Files are deleted only after 
 database change has committed.
 """
 
+import asyncio
 import io
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
 from app.core.clock import now
@@ -47,12 +48,14 @@ def check_size(data: bytes) -> None:
         raise TooLarge(f"Files can be at most {settings.max_upload_mb} MB.")
 
 
-def _save_then_write(storage: LocalStorage, key: str, data: bytes, write_db: Callable) -> object:
-    storage.put(key, data)
+async def _save_then_write(
+    storage: LocalStorage, key: str, data: bytes, write_db: Callable[[], Awaitable]
+) -> object:
+    await storage.put(key, data)
     try:
-        return write_db()
+        return await write_db()
     except Exception:
-        storage.delete(key)
+        await storage.delete(key)
         raise
 
 
@@ -82,45 +85,47 @@ def _square_webp(data: bytes) -> bytes:
         raise InvalidInput("This image can't be read. Try another JPG or PNG.") from exc
 
 
-def set_photo(
-    db: Session, storage: LocalStorage, user: User, employee_id: int, data: bytes
+async def set_photo(
+    db: AsyncSession, storage: LocalStorage, user: User, employee_id: int, data: bytes
 ) -> PhotoOut:
-    employee = get_or_404(db, employee_id)
+    employee = await get_or_404(db, employee_id)
     check_size(data)
     content_type, _ = detect_type(data)
     if content_type == "application/pdf":
         raise InvalidInput("A photo must be a JPG or PNG.")
-    webp = _square_webp(data)
+    webp = await asyncio.to_thread(_square_webp, data)  # image work is CPU-heavy
     old_key = employee.photo_key
     new_key = f"employees/{employee.id}/photo-{uuid.uuid4().hex}.webp"
 
-    def write_db():
+    async def write_db():
         employee.photo_key = new_key
         employee.updated_by = user.id
-        cache.bump_data_version(db)
-        db.commit()
+        await cache.bump_data_version(db)
+        await db.commit()
 
-    _save_then_write(storage, new_key, webp, write_db)
+    await _save_then_write(storage, new_key, webp, write_db)
     if old_key:
-        storage.delete(old_key)
+        await storage.delete(old_key)
     return PhotoOut(photo_url=signed_url(new_key, "photo.webp", "image/webp", inline=True))
 
 
-def remove_photo(db: Session, storage: LocalStorage, user: User, employee_id: int) -> None:
-    employee = get_or_404(db, employee_id)
+async def remove_photo(
+    db: AsyncSession, storage: LocalStorage, user: User, employee_id: int
+) -> None:
+    employee = await get_or_404(db, employee_id)
     old_key = employee.photo_key
     if old_key is None:
         return
     employee.photo_key = None
     employee.updated_by = user.id
-    cache.bump_data_version(db)
-    db.commit()
-    storage.delete(old_key)
+    await cache.bump_data_version(db)
+    await db.commit()
+    await storage.delete(old_key)
 
 
-def list_documents(db: Session, employee_id: int) -> list[DocumentOut]:
-    get_or_404(db, employee_id)
-    docs = db.scalars(
+async def list_documents(db: AsyncSession, employee_id: int) -> list[DocumentOut]:
+    await get_or_404(db, employee_id)
+    docs = await db.scalars(
         select(EmployeeDocument)
         .where(EmployeeDocument.employee_id == employee_id, EmployeeDocument.deleted_at.is_(None))
         .order_by(EmployeeDocument.uploaded_at.desc(), EmployeeDocument.id.desc())
@@ -133,20 +138,20 @@ def _clean_file_name(name: str | None, extension: str) -> str:
     return base or f"document.{extension}"
 
 
-def upload_document(
-    db: Session,
+async def upload_document(
+    db: AsyncSession,
     storage: LocalStorage,
     user: User,
     employee_id: int,
     file_name: str | None,
     data: bytes,
 ) -> DocumentOut:
-    employee = get_or_404(db, employee_id)
+    employee = await get_or_404(db, employee_id)
     check_size(data)
     content_type, extension = detect_type(data)
     key = f"employees/{employee.id}/docs/{uuid.uuid4().hex}.{extension}"
 
-    def write_db() -> EmployeeDocument:
+    async def write_db() -> EmployeeDocument:
         doc = EmployeeDocument(
             employee_id=employee.id,
             file_name=_clean_file_name(file_name, extension),
@@ -156,26 +161,27 @@ def upload_document(
             uploaded_by=user.id,
         )
         db.add(doc)
-        db.commit()
+        await db.commit()
+        await db.refresh(doc)  # loads the uploader for the response
         return doc
 
-    return _document_out(_save_then_write(storage, key, data, write_db))
+    return _document_out(await _save_then_write(storage, key, data, write_db))
 
 
-def _get_document(db: Session, employee_id: int, doc_id: int) -> EmployeeDocument:
-    doc = db.get(EmployeeDocument, doc_id)
+async def _get_document(db: AsyncSession, employee_id: int, doc_id: int) -> EmployeeDocument:
+    doc = await db.get(EmployeeDocument, doc_id)
     if doc is None or doc.employee_id != employee_id or doc.deleted_at is not None:
         raise NotFound("Document not found.")
     return doc
 
 
-def download_link(db: Session, employee_id: int, doc_id: int) -> LinkOut:
-    doc = _get_document(db, employee_id, doc_id)
+async def download_link(db: AsyncSession, employee_id: int, doc_id: int) -> LinkOut:
+    doc = await _get_document(db, employee_id, doc_id)
     return LinkOut(url=signed_url(doc.storage_key, doc.file_name, doc.content_type))
 
 
-def delete_document(db: Session, employee_id: int, doc_id: int) -> None:
+async def delete_document(db: AsyncSession, employee_id: int, doc_id: int) -> None:
     """Soft delete: the row stays for the record; the file is purged later."""
-    doc = _get_document(db, employee_id, doc_id)
+    doc = await _get_document(db, employee_id, doc_id)
     doc.deleted_at = now()
-    db.commit()
+    await db.commit()

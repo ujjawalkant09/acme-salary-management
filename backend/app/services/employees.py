@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
 from app.core.clock import now, today
@@ -43,8 +43,8 @@ MAX_FUTURE = timedelta(days=366)
 
 
 # ---------- reading ----------
-def get_or_404(db: Session, employee_id: int) -> Employee:
-    employee = repo.get(db, employee_id)
+async def get_or_404(db: AsyncSession, employee_id: int) -> Employee:
+    employee = await repo.get(db, employee_id)
     if employee is None:
         raise NotFound("Employee not found.")
     return employee
@@ -72,33 +72,35 @@ def _list_fields(e: Employee) -> dict:
     }
 
 
-def _outlier_ids(db: Session, filters: EmployeeFilters) -> list[int] | None:
-    return insights.outlier_ids(db) if filters.outliers_only else None
+async def _outlier_ids(db: AsyncSession, filters: EmployeeFilters) -> list[int] | None:
+    return await insights.outlier_ids(db) if filters.outliers_only else None
 
 
-def list_employees(db: Session, params: EmployeeListParams) -> Page[EmployeeListItem]:
-    rows, total = repo.list_page(db, params, _outlier_ids(db, params))
+async def list_employees(db: AsyncSession, params: EmployeeListParams) -> Page[EmployeeListItem]:
+    rows, total = await repo.list_page(db, params, await _outlier_ids(db, params))
     items = [EmployeeListItem(**_list_fields(e)) for e in rows]
     return Page.of(items, total, params.page, params.page_size)
 
 
-def facets(db: Session, filters: EmployeeFilters) -> Facets:
-    ids = _outlier_ids(db, filters)
+async def facets(db: AsyncSession, filters: EmployeeFilters) -> Facets:
+    ids = await _outlier_ids(db, filters)
     return Facets(
-        status=repo.facet_counts(db, filters, Employee.status, "status", ids),
-        country=repo.facet_counts(db, filters, Employee.country_code, "country", ids),
-        department_id=repo.facet_counts(db, filters, Employee.department_id, "department_id", ids),
-        level=repo.facet_counts(db, filters, Employee.job_level, "level", ids),
-        employment_type=repo.facet_counts(
+        status=await repo.facet_counts(db, filters, Employee.status, "status", ids),
+        country=await repo.facet_counts(db, filters, Employee.country_code, "country", ids),
+        department_id=await repo.facet_counts(
+            db, filters, Employee.department_id, "department_id", ids
+        ),
+        level=await repo.facet_counts(db, filters, Employee.job_level, "level", ids),
+        employment_type=await repo.facet_counts(
             db, filters, Employee.employment_type, "employment_type", ids
         ),
     )
 
 
-def _peer_stats(db: Session, employee: Employee) -> PeerStats | None:
+async def _peer_stats(db: AsyncSession, employee: Employee) -> PeerStats | None:
     if employee.status != "active":
         return None
-    values = repo.peer_salaries(db, employee)
+    values = await repo.peer_salaries(db, employee)
     if len(values) < 2:
         return None
     peers = spread(values)
@@ -117,8 +119,8 @@ def _peer_stats(db: Session, employee: Employee) -> PeerStats | None:
     )
 
 
-def profile(db: Session, employee: Employee) -> EmployeeOut:
-    upcoming = repo.next_future_record(
+async def profile(db: AsyncSession, employee: Employee) -> EmployeeOut:
+    upcoming = await repo.next_future_record(
         db, employee.id, max(today(), employee.salary_effective_date)
     )
     return EmployeeOut(
@@ -135,8 +137,8 @@ def profile(db: Session, employee: Employee) -> EmployeeOut:
         ),
         created_at=employee.created_at,
         updated_at=employee.updated_at,
-        updated_by_name=repo.user_name(db, employee.updated_by),
-        rates_date=fx.rates_in_use(db).rates_date,
+        updated_by_name=await repo.user_name(db, employee.updated_by),
+        rates_date=(await fx.rates_in_use(db)).rates_date,
         upcoming_salary=(
             UpcomingSalary(
                 amount=upcoming.amount,
@@ -146,13 +148,13 @@ def profile(db: Session, employee: Employee) -> EmployeeOut:
             if upcoming
             else None
         ),
-        peers=_peer_stats(db, employee),
+        peers=await _peer_stats(db, employee),
     )
 
 
-def salary_history(db: Session, employee_id: int) -> list[SalaryRecordOut]:
-    get_or_404(db, employee_id)
-    records = repo.salary_records(db, employee_id)
+async def salary_history(db: AsyncSession, employee_id: int) -> list[SalaryRecordOut]:
+    await get_or_404(db, employee_id)
+    records = await repo.salary_records(db, employee_id)
     history = []
     for index, record in enumerate(records):
         previous = records[index + 1] if index + 1 < len(records) else None
@@ -179,10 +181,10 @@ def salary_history(db: Session, employee_id: int) -> list[SalaryRecordOut]:
     return history
 
 
-def recent_changes(db: Session, limit: int) -> list[RecentSalaryChange]:
+async def recent_changes(db: AsyncSession, limit: int) -> list[RecentSalaryChange]:
     changes = []
-    for record in repo.recent_salary_changes(db, limit):
-        employee = db.get(Employee, record.employee_id)
+    for record in await repo.recent_salary_changes(db, limit):
+        employee = await db.get(Employee, record.employee_id)
         changes.append(
             RecentSalaryChange(
                 id=record.id,
@@ -201,30 +203,30 @@ def recent_changes(db: Session, limit: int) -> list[RecentSalaryChange]:
 
 
 # ---------- validation helpers ----------
-def _check_country(db: Session, code: str) -> Country:
-    country = db.get(Country, code)
+async def _check_country(db: AsyncSession, code: str) -> Country:
+    country = await db.get(Country, code)
     if country is None:
         raise InvalidInput("Unknown country.", {"fields": {"country_code": "Unknown country"}})
     return country
 
 
-def _check_department(db: Session, department_id: int) -> None:
-    if not repo.department_exists(db, department_id):
+async def _check_department(db: AsyncSession, department_id: int) -> None:
+    if not await repo.department_exists(db, department_id):
         raise InvalidInput(
             "Unknown department.", {"fields": {"department_id": "Unknown department"}}
         )
 
 
-def _check_email_free(db: Session, email: str, exclude_id: int | None = None) -> None:
-    if repo.email_taken(db, email, exclude_id):
+async def _check_email_free(db: AsyncSession, email: str, exclude_id: int | None = None) -> None:
+    if await repo.email_taken(db, email, exclude_id):
         raise Conflict(
             "Another employee already uses this email.",
             {"fields": {"email": "Already used by another employee"}},
         )
 
 
-def _check_currency(db: Session, currency: str) -> None:
-    if currency not in fx.supported_currencies(db):
+async def _check_currency(db: AsyncSession, currency: str) -> None:
+    if currency not in await fx.supported_currencies(db):
         raise InvalidInput(
             f"{currency} is not a supported currency.",
             {"fields": {"currency": "Not a supported currency"}},
@@ -250,12 +252,12 @@ def _check_version(employee: Employee, version: int) -> None:
 
 
 # ---------- current salary ----------
-def sync_current_salary(db: Session, employee: Employee, rates: fx.Rates) -> None:
+async def sync_current_salary(db: AsyncSession, employee: Employee, rates: fx.Rates) -> None:
     """Point the denormalized current salary at the latest entry that has taken effect
     (or, for someone who hasn't started yet, their first entry)."""
-    record = repo.latest_effective_record(db, employee.id, today()) or repo.next_future_record(
-        db, employee.id, date.min
-    )
+    record = await repo.latest_effective_record(
+        db, employee.id, today()
+    ) or await repo.next_future_record(db, employee.id, date.min)
     employee.current_salary = record.amount
     employee.current_currency = record.currency
     employee.current_salary_usd = rates.to_usd(record.amount, record.currency)
@@ -278,33 +280,33 @@ def apply_salary_record(employee: Employee, record: SalaryRecord, rates: fx.Rate
         employee.salary_effective_date = record.effective_date
 
 
-def promote_due_salaries(db: Session) -> int:
+async def promote_due_salaries(db: AsyncSession) -> int:
     """Make future-dated salary entries current once their date arrives. Safe to re-run."""
-    ids = repo.employees_with_due_salary(db, today())
+    ids = await repo.employees_with_due_salary(db, today())
     if not ids:
         return 0
-    rates = fx.rates_in_use(db)
+    rates = await fx.rates_in_use(db)
     for employee_id in ids:
-        sync_current_salary(db, db.get(Employee, employee_id), rates)
-    cache.bump_data_version(db)
-    db.commit()
+        await sync_current_salary(db, await db.get(Employee, employee_id), rates)
+    await cache.bump_data_version(db)
+    await db.commit()
     return len(ids)
 
 
 # ---------- writes ----------
-def create(db: Session, user: User, data: EmployeeCreate) -> EmployeeOut:
-    country = _check_country(db, data.country_code)
-    _check_department(db, data.department_id)
+async def create(db: AsyncSession, user: User, data: EmployeeCreate) -> EmployeeOut:
+    country = await _check_country(db, data.country_code)
+    await _check_department(db, data.department_id)
     email = data.email.lower()
-    _check_email_free(db, email)
+    await _check_email_free(db, email)
     currency = data.salary.currency or country.currency
-    _check_currency(db, currency)
+    await _check_currency(db, currency)
     effective_date = data.salary.effective_date or data.hire_date
     _check_salary_date(effective_date, data.hire_date)
 
-    rates = fx.rates_in_use(db)
+    rates = await fx.rates_in_use(db)
     employee = Employee(
-        employee_code=repo.next_employee_code(db),
+        employee_code=await repo.next_employee_code(db),
         first_name=data.first_name,
         last_name=data.last_name,
         email=email,
@@ -324,7 +326,7 @@ def create(db: Session, user: User, data: EmployeeCreate) -> EmployeeOut:
         updated_by=user.id,
     )
     db.add(employee)
-    db.flush()
+    await db.flush()
     db.add(
         SalaryRecord(
             employee_id=employee.id,
@@ -336,13 +338,22 @@ def create(db: Session, user: User, data: EmployeeCreate) -> EmployeeOut:
             created_by=user.id,
         )
     )
-    cache.bump_data_version(db)
-    db.commit()
-    return profile(db, employee)
+    await cache.bump_data_version(db)
+    await db.commit()
+    return await _saved_profile(db, employee)
 
 
-def update(db: Session, user: User, employee_id: int, data: EmployeeUpdate) -> EmployeeOut:
-    employee = get_or_404(db, employee_id)
+async def _saved_profile(db: AsyncSession, employee: Employee) -> EmployeeOut:
+    """The profile after a write. Reloading picks up the department and country objects,
+    which an async session can't load on first access (and which are stale after a move)."""
+    await db.refresh(employee)
+    return await profile(db, employee)
+
+
+async def update(
+    db: AsyncSession, user: User, employee_id: int, data: EmployeeUpdate
+) -> EmployeeOut:
+    employee = await get_or_404(db, employee_id)
     _check_version(employee, data.version)
     changes = data.model_dump(exclude_unset=True, exclude={"version"})
     for field in (
@@ -363,31 +374,33 @@ def update(db: Session, user: User, employee_id: int, data: EmployeeUpdate) -> E
             )
     if "email" in changes:
         changes["email"] = changes["email"].lower()
-        _check_email_free(db, changes["email"], employee.id)
+        await _check_email_free(db, changes["email"], employee.id)
     if "country_code" in changes:
-        _check_country(db, changes["country_code"])
+        await _check_country(db, changes["country_code"])
     if "department_id" in changes:
-        _check_department(db, changes["department_id"])
+        await _check_department(db, changes["department_id"])
     if "hire_date" in changes:
-        first_salary = min(r.effective_date for r in repo.salary_records(db, employee.id))
+        first_salary = min(r.effective_date for r in await repo.salary_records(db, employee.id))
         if changes["hire_date"] > first_salary:
             raise InvalidInput(
                 "The hire date can't be after the first salary entry.",
                 {"fields": {"hire_date": "After the first salary entry"}},
             )
     if not changes:
-        return profile(db, employee)
+        return await profile(db, employee)
 
     for field, value in changes.items():
         setattr(employee, field, value)
     employee.updated_by = user.id
-    cache.bump_data_version(db)
-    db.commit()
-    return profile(db, employee)
+    await cache.bump_data_version(db)
+    await db.commit()
+    return await _saved_profile(db, employee)
 
 
-def mark_left(db: Session, user: User, employee_id: int, data: MarkLeftIn) -> EmployeeOut:
-    employee = get_or_404(db, employee_id)
+async def mark_left(
+    db: AsyncSession, user: User, employee_id: int, data: MarkLeftIn
+) -> EmployeeOut:
+    employee = await get_or_404(db, employee_id)
     _check_version(employee, data.version)
     if employee.status == "left":
         raise Conflict("This employee is already marked as left.")
@@ -399,32 +412,36 @@ def mark_left(db: Session, user: User, employee_id: int, data: MarkLeftIn) -> Em
     employee.status = "left"
     employee.left_on = data.left_on
     employee.updated_by = user.id
-    cache.bump_data_version(db)
-    db.commit()
-    return profile(db, employee)
+    await cache.bump_data_version(db)
+    await db.commit()
+    return await profile(db, employee)
 
 
-def reactivate(db: Session, user: User, employee_id: int, data: ReactivateIn) -> EmployeeOut:
-    employee = get_or_404(db, employee_id)
+async def reactivate(
+    db: AsyncSession, user: User, employee_id: int, data: ReactivateIn
+) -> EmployeeOut:
+    employee = await get_or_404(db, employee_id)
     _check_version(employee, data.version)
     if employee.status == "active":
         raise Conflict("This employee is already current.")
     employee.status = "active"
     employee.left_on = None
     employee.updated_by = user.id
-    cache.bump_data_version(db)
-    db.commit()
-    return profile(db, employee)
+    await cache.bump_data_version(db)
+    await db.commit()
+    return await profile(db, employee)
 
 
-def change_salary(db: Session, user: User, employee_id: int, data: SalaryChangeIn) -> EmployeeOut:
+async def change_salary(
+    db: AsyncSession, user: User, employee_id: int, data: SalaryChangeIn
+) -> EmployeeOut:
     """New history entry + current salary + who/when + cache version, in one transaction."""
-    employee = get_or_404(db, employee_id)
+    employee = await get_or_404(db, employee_id)
     _check_version(employee, data.version)
     if employee.status != "active":
         raise Conflict("Salary changes can only be recorded for current employees.")
     currency = data.currency or employee.country.currency
-    _check_currency(db, currency)
+    await _check_currency(db, currency)
     _check_salary_date(data.effective_date, employee.hire_date)
 
     record = SalaryRecord(
@@ -437,12 +454,12 @@ def change_salary(db: Session, user: User, employee_id: int, data: SalaryChangeI
         created_by=user.id,
     )
     db.add(record)
-    apply_salary_record(employee, record, fx.rates_in_use(db))
+    apply_salary_record(employee, record, await fx.rates_in_use(db))
     employee.updated_by = user.id
     employee.updated_at = now()  # always a new version, even for a future-dated change
-    cache.bump_data_version(db)
-    db.commit()
-    return profile(db, employee)
+    await cache.bump_data_version(db)
+    await db.commit()
+    return await profile(db, employee)
 
 
 # ---------- export ----------
@@ -469,11 +486,11 @@ def _is_number(text: str) -> bool:
     return True
 
 
-def export_csv(db: Session, filters: EmployeeFilters) -> str:
+async def export_csv(db: AsyncSession, filters: EmployeeFilters) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(EXPORT_COLUMNS)
-    for e in repo.iter_filtered(db, filters, _outlier_ids(db, filters)):
+    async for e in repo.iter_filtered(db, filters, await _outlier_ids(db, filters)):
         writer.writerow(
             safe_cell(v)
             for v in (
@@ -486,5 +503,7 @@ def export_csv(db: Session, filters: EmployeeFilters) -> str:
     return buffer.getvalue()
 
 
-def all_job_titles(db: Session) -> list[str]:
-    return list(db.scalars(select(Employee.job_title).distinct().order_by(Employee.job_title)))
+async def all_job_titles(db: AsyncSession) -> list[str]:
+    return list(
+        await db.scalars(select(Employee.job_title).distinct().order_by(Employee.job_title))
+    )

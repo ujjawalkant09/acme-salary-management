@@ -1,3 +1,5 @@
+from sqlalchemy import update
+
 from app.core.config import get_settings
 from app.core.rate_limit import limiter
 from app.models import User
@@ -23,18 +25,18 @@ def test_wrong_password_and_unknown_email_get_the_same_answer(anon_client):
     assert wrong.json()["error"]["message"] == "Wrong email or password."
 
 
-def test_inactive_user_cannot_sign_in(anon_client, db):
-    db.query(User).filter_by(email="viewer@acme.example").update({"active": False})
-    db.commit()
+async def test_inactive_user_cannot_sign_in(anon_client, db):
+    await db.execute(update(User).filter_by(email="viewer@acme.example").values(active=False))
+    await db.commit()
     response = anon_client.post(
         LOGIN, json={"email": "viewer@acme.example", "password": "viewer-pass"}
     )
     assert response.status_code == 401
 
 
-def test_deactivated_user_loses_access_on_next_request(viewer_client, db):
-    db.query(User).filter_by(email="viewer@acme.example").update({"active": False})
-    db.commit()
+async def test_deactivated_user_loses_access_on_next_request(viewer_client, db):
+    await db.execute(update(User).filter_by(email="viewer@acme.example").values(active=False))
+    await db.commit()
     assert viewer_client.get("/api/v1/auth/me").status_code == 401
 
 
