@@ -9,6 +9,7 @@ fixed snapshot so the seed never needs the network; the worker refreshes them da
 """
 
 import argparse
+import asyncio
 import random
 import time as timer
 import unicodedata
@@ -16,7 +17,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import delete, func, insert, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
 from app.core.auth import hash_password
@@ -218,10 +219,10 @@ def generate(count: int, as_of: date, rng: random.Random) -> tuple[list[dict], l
     return employees, records
 
 
-def _reset(db: Session) -> None:
+async def _reset(db: AsyncSession) -> None:
     for model in (ImportRow, SalaryRecord, ImportJob, EmployeeDocument, Employee,
                   IdempotencyKey, Department, FxRate, User):  # fmt: skip
-        db.execute(delete(model))
+        await db.execute(delete(model))
 
 
 def _batched(rows: list[dict]):
@@ -229,13 +230,13 @@ def _batched(rows: list[dict]):
         yield rows[start : start + BATCH]
 
 
-def seed(db: Session, count: int, as_of: date, reset: bool = False,
+async def seed(db: AsyncSession, count: int, as_of: date, reset: bool = False,
          if_empty: bool = False) -> bool:  # fmt: skip
     """Returns False when `if_empty` is set and the database already has employees."""
     settings = get_settings()
     if reset:
-        _reset(db)
-    elif db.scalar(select(func.count()).select_from(Employee)):
+        await _reset(db)
+    elif await db.scalar(select(func.count()).select_from(Employee)):
         if if_empty:
             return False
         raise SystemExit("Employees already exist. Use --reset to replace them.")
@@ -250,33 +251,33 @@ def seed(db: Session, count: int, as_of: date, reset: bool = False,
         db.add(User(email=email, name=name, role=role, password_hash=hash_password(password)))
     for name in DEPARTMENTS:
         db.add(Department(name=name))
-    db.flush()
+    await db.flush()
 
-    admin_id = db.scalar(select(User.id).where(User.role == "hr_admin"))
-    department_ids = dict(db.execute(select(Department.name, Department.id)).all())
+    admin_id = await db.scalar(select(User.id).where(User.role == "hr_admin"))
+    department_ids = dict((await db.execute(select(Department.name, Department.id))).all())
     employees, records = generate(count, as_of, random.Random(RNG_SEED))
     stamp = now()
     for batch in _batched(employees):
         for row in batch:
             row["department_id"] = department_ids[row.pop("department")]
             row.update(version=1, created_at=stamp, updated_at=stamp, updated_by=admin_id)
-        db.execute(insert(Employee), batch)
+        await db.execute(insert(Employee), batch)
     for batch in _batched(records):
         for row in batch:
             # History is recorded on its start date (future raises: today), so "recent
             # changes" shows the latest entries rather than the whole history at once.
             recorded = datetime.combine(row["effective_date"], time(9), UTC)
             row.update(created_by=admin_id, created_at=min(recorded, stamp))
-        db.execute(insert(SalaryRecord), batch)
+        await db.execute(insert(SalaryRecord), batch)
     if db.bind.dialect.name == "postgresql":
-        db.execute(text("SELECT setval(pg_get_serial_sequence('employees', 'id'), "
+        await db.execute(text("SELECT setval(pg_get_serial_sequence('employees', 'id'), "
                         "(SELECT max(id) FROM employees))"))  # fmt: skip
-    cache.bump_data_version(db)
-    db.commit()
+    await cache.bump_data_version(db)
+    await db.commit()
     return True
 
 
-def main() -> None:
+async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=10_000)
     mode = parser.add_mutually_exclusive_group()
@@ -284,8 +285,8 @@ def main() -> None:
     mode.add_argument("--if-empty", action="store_true")
     args = parser.parse_args()
     started = timer.perf_counter()
-    with SessionLocal() as db:
-        seeded = seed(db, args.count, today(), args.reset, args.if_empty)
+    async with SessionLocal() as db:
+        seeded = await seed(db, args.count, today(), args.reset, args.if_empty)
     if seeded:
         print(f"Seeded {args.count:,} employees in {timer.perf_counter() - started:.1f}s")
     else:
@@ -293,4 +294,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

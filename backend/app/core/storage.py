@@ -5,6 +5,7 @@ Files are never served from a public path: downloads go through short-lived sign
 the same three methods is added with the AWS deployment.
 """
 
+import asyncio
 from pathlib import Path
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -16,6 +17,8 @@ LINK_LIFETIME_SECONDS = 15 * 60
 
 
 class LocalStorage:
+    """Disk reads and writes run in a thread, so they never hold up the event loop."""
+
     def __init__(self, root: Path):
         self.root = root
 
@@ -25,19 +28,27 @@ class LocalStorage:
             raise NotFound("File not found.")
         return path
 
-    def put(self, key: str, data: bytes) -> None:
+    async def put(self, key: str, data: bytes) -> None:
         path = self._path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
 
-    def get(self, key: str) -> bytes:
+        def write() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+
+        await asyncio.to_thread(write)
+
+    async def get(self, key: str) -> bytes:
         path = self._path(key)
-        if not path.is_file():
-            raise NotFound("File not found.")
-        return path.read_bytes()
 
-    def delete(self, key: str) -> None:
-        self._path(key).unlink(missing_ok=True)
+        def read() -> bytes:
+            if not path.is_file():
+                raise NotFound("File not found.")
+            return path.read_bytes()
+
+        return await asyncio.to_thread(read)
+
+    async def delete(self, key: str) -> None:
+        await asyncio.to_thread(self._path(key).unlink, missing_ok=True)
 
 
 def get_storage() -> LocalStorage:

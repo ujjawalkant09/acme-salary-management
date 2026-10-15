@@ -6,7 +6,7 @@
 | Layer | Choice | Reasoning |
 |------|--------|-----------|
 | API | **Python 3.12, FastAPI** + Pydantic v2 | Typed validation, auto OpenAPI docs, little boilerplate |
-| ORM / migrations | **SQLAlchemy 2.0** (sync) + **Alembic** | Mature, explicit, portable |
+| ORM / migrations | **SQLAlchemy 2.0** (asyncio, `AsyncSession`) + **Alembic** | Mature, explicit, portable; async endpoints don't hold a thread while waiting on the database |
 | DB | **PostgreSQL** (Docker locally and on the server); SQLite only for fast unit tests | Same engine in development and production; CI also runs the tests on Postgres |
 | UI | **React + Vite + TypeScript**, **shadcn/ui** (Tailwind + Radix), TanStack Table + Query, Recharts | One light styling system; we own the component code |
 | Tooling | uv, ruff, pytest; Vitest + Testing Library; GitHub Actions | Fast, standard |
@@ -80,7 +80,7 @@ backend/tests/     unit (services) + API (TestClient, temp SQLite)
 ## Optimizations
 | Concern | v1 implementation (lightweight) | How it scales later |
 |--------|----------------------------------|---------------------|
-| **Indexing** | Indexes match the real query patterns: `(status, country_code, job_title)`, `department_id`, `(last_name, first_name)`, `current_salary_usd`, unique `employee_code` / `lower(email)`, `(employee_id, effective_date DESC)` on salary records. Verified with `EXPLAIN` | Postgres trigram index for fuzzy name search if needed |
+| **Indexing** | Indexes match the real query patterns: `(status, country_code, job_title)`, `department_id`, `(last_name, first_name)`, `current_salary_usd`, `lower(job_title)`, unique `employee_code` / `email` (stored lower-cased), `(employee_id, effective_date)` and `(created_at, id)` on salary records. Verified with `EXPLAIN ANALYZE` on Postgres with 10,000 employees | Postgres trigram index for fuzzy name search if needed |
 | **Pagination** | Every list endpoint is paginated (`page`, `page_size`, default 20, max 100), with sorting and filtering in SQL and `id` as tiebreaker; the response includes `total` | Keyset (cursor) pagination for very deep pages, behind the same envelope |
 | **Caching** | Insights and `/meta` use an in-process cache keyed by a **data version** that every write bumps in the same transaction, so numbers are never stale after an edit. ETag/304 on those reads; TanStack Query caches on the client | The cache sits behind a `Cache` interface → Redis via `CACHE_URL` with more than one instance |
 | **Rate limiting** | `slowapi` per signed-in user (login per IP, 5/min): reads 120/min, writes 30/min, uploads 10/min, imports and CSV export 5/min; `429` with `Retry-After` | Redis storage via `RATE_LIMIT_STORAGE_URL` for a shared limit |

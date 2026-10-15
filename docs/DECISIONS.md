@@ -155,6 +155,18 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | The problem-rows CSV (`errors.csv`) escapes formulas the same way as the employee export | It writes back cells exactly as uploaded, so a file from someone else could put a live formula in front of an HR Admin |
 | Frontend coverage with `@vitest/coverage-v8` (`npm run coverage`), leaving out the vendored shadcn/ui files; backend coverage with `pytest-cov` on demand (`uv run --with pytest-cov`) | Shows untested code without adding a backend dependency |
 | Kept as they are: login is limited per IP (5 a minute) and not per account; uvicorn trusts forwarded headers from any address | bcrypt keeps guessing slow; only Caddy can reach the app, and Caddy replaces `X-Forwarded-For`. Revisit if port 8000 is ever exposed |
+| Two indexes from an `EXPLAIN ANALYZE` pass over the app's real queries on Postgres (10,000 employees, 35,283 salary entries): `salary_records (created_at, id)` and `employees (lower(job_title))`. Search (`%term%`) and deep pages still read the whole table | "Recent salary changes" sorted every salary entry to return 10 (23.8 ms → 0.07 ms) and salary entries only grow; the job-title filter compares lower case, which the `job_title` column index can't serve (2.4 ms → 0.5 ms). The rest already used an index or stays under 16 ms at 10,000 rows |
+
+## Async backend (15 Oct 2026)
+| Decision | Why |
+|---|---|
+| `async def` endpoints and SQLAlchemy `AsyncSession` throughout: API, services, repositories, the worker loop (with `httpx.AsyncClient`) and the seed script. Replaces the first sync design | Author's choice. One event loop serves requests that are waiting on the database without a thread each. Measured with ApacheBench (one uvicorn process, Postgres 16, 10,000 employees, single runs on a laptop): 13–43% more requests a second at 10–50 at once, no clear difference one at a time, slower slowest-5% (p95) at 50+. At 100 at once the sync server stalled: its 40 threads waited on 15 database connections and requests failed after 30 s; async served all of them. At the expected load (about 5 people) both answer in 5–25 ms |
+| `DATABASE_URL` keeps its sync form (`sqlite:///…`, `postgresql+psycopg://…`); the app maps SQLite to `aiosqlite`, and psycopg runs in its own async mode | Alembic, the deploy configs and every `.env` stay as they are |
+| SQLite connections are not pooled (`NullPool`) | A SQLite connection is cheap to open, and an aiosqlite connection belongs to the event loop that opened it (the test client runs the app on its own loop) |
+| bcrypt, Pillow, building the xlsx template and file reads/writes run in a thread (`asyncio.to_thread`) | A slow call on the event loop would hold up every other request |
+| After a write, the service reloads the employee (`refresh()`) before building the response | An async session can't load the department on first access; this also fixed a bug in the sync version, where moving someone to another department returned the old department's name |
+| `Idempotency-Key` handling reads the user's id before running the work | A rollback expires every loaded object; the sync session reloaded it silently, the async one raised (`MissingGreenlet`), so a race on the same key would have returned a 500 |
+| Tests: `pytest-asyncio` in auto mode; a coroutine that is never awaited fails the test | A forgotten `await` otherwise only prints a warning and the test can still pass |
 
 ## Wake page (15 Oct 2026)
 | Decision | Why |

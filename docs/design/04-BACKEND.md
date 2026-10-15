@@ -1,8 +1,12 @@
 # 04 · Backend design
 
-**Python 3.12 + FastAPI + SQLAlchemy 2.0 (sync) + Pydantic v2 + Alembic.** One web service, plus a worker container (same image) for imports and the daily rate fetch.
+**Python 3.12 + FastAPI (async) + SQLAlchemy 2.0 (asyncio) + Pydantic v2 + Alembic.** One web service, plus a worker container (same image) for imports and the daily rate fetch.
 
-*Why sync SQLAlchemy?* The work is short database queries for a handful of users. FastAPI runs sync endpoints in a thread pool, so we get simpler code, simpler tests and no async/sync mixing bugs, at no real cost at this scale.
+*Why async?* The first design was sync (FastAPI runs sync endpoints in a thread pool, which is enough for a handful of users). On 15 Oct 2026 the author chose async: `async def` endpoints and SQLAlchemy's `AsyncSession`, so one event loop serves the requests that are waiting on the database instead of one thread each. The worker and the seed script use the same async services. Rules that keep it correct:
+- Every database call is awaited. A forgotten `await` fails the tests (pytest turns the "never awaited" warning into an error).
+- An async session can't load data when an attribute is read. Relationships are loaded with the query (`lazy="joined"`) or with `refresh()` after a write, and nothing reads an ORM object after a rollback without reloading it.
+- Slow work that isn't database I/O (bcrypt, Pillow, building the xlsx template, reading and writing files) runs with `asyncio.to_thread`, so it never blocks the loop.
+- `DATABASE_URL` keeps its sync form, which Alembic uses. The app runs SQLite on aiosqlite and `postgresql+psycopg` on psycopg's own async mode.
 
 ## 1. Layers
 ```

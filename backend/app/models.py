@@ -101,6 +101,8 @@ class Employee(Base):
         Index("ix_employees_department", "department_id"),
         Index("ix_employees_name", "last_name", "first_name"),
         Index("ix_employees_salary_usd", "current_salary_usd"),
+        # The job-title filter matches case-insensitively.
+        Index("ix_employees_job_title_lower", text("lower(job_title)")),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -146,6 +148,8 @@ class SalaryRecord(Base):
         CheckConstraint("amount > 0", name="ck_salary_amount_positive"),
         CheckConstraint(_in("reason", SALARY_REASONS), name="ck_salary_reason"),
         Index("ix_salary_records_employee_date", "employee_id", "effective_date"),
+        # "Recent salary changes" reads the newest entries first.
+        Index("ix_salary_records_created", "created_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

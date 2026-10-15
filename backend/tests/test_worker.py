@@ -11,24 +11,24 @@ from app.worker import __main__ as worker
 from app.worker import tasks
 
 
-def counting_client(calls: list) -> httpx.Client:
+def counting_client(calls: list) -> httpx.AsyncClient:
     def handler(request):
         calls.append(request)
         return httpx.Response(200, json={"date": "2026-10-14", "rates": {"INR": 80}})
 
-    return httpx.Client(transport=httpx.MockTransport(handler))
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def test_rates_are_fetched_only_after_the_ecb_publishes(db, storage, frozen_clock):
+async def test_rates_are_fetched_only_after_the_ecb_publishes(db, storage, frozen_clock):
     calls = []
     frozen_clock.set(datetime(2026, 10, 14, 9, tzinfo=UTC))
-    tasks.run_daily_tasks(db, storage, counting_client(calls))
+    await tasks.run_daily_tasks(db, storage, counting_client(calls))
     assert calls == []
     frozen_clock.set(datetime(2026, 10, 14, 16, 5, tzinfo=UTC))
-    tasks.run_daily_tasks(db, storage, counting_client(calls))
-    tasks.run_daily_tasks(db, storage, counting_client(calls))  # re-running changes nothing
+    await tasks.run_daily_tasks(db, storage, counting_client(calls))
+    await tasks.run_daily_tasks(db, storage, counting_client(calls))  # re-running changes nothing
     assert len(calls) == 1
-    assert str(db.get(AppState, 1).fx_checked_on) == "2026-10-14"
+    assert str((await db.get(AppState, 1)).fx_checked_on) == "2026-10-14"
 
 
 def test_daily_check_is_throttled(monkeypatch, frozen_clock):
@@ -39,24 +39,27 @@ def test_daily_check_is_throttled(monkeypatch, frozen_clock):
     assert tasks.daily_tasks_due()
 
 
-def test_expired_idempotency_keys_are_purged(db, admin, frozen_clock):
+async def test_expired_idempotency_keys_are_purged(db, admin, frozen_clock):
     db.add(IdempotencyKey(key=str(uuid.uuid4()), user_id=admin.id, endpoint="x",
                           request_hash="h", expires_at=frozen_clock.current + timedelta(hours=24)))  # fmt: skip
-    db.commit()
-    assert idempotency.purge_expired(db) == 0
+    await db.commit()
+    assert await idempotency.purge_expired(db) == 0
     frozen_clock.set(frozen_clock.current + timedelta(hours=25))
-    assert idempotency.purge_expired(db) == 1
+    assert await idempotency.purge_expired(db) == 1
 
 
-def test_no_job_means_no_work(db, storage):
-    assert tasks.process_next_job(db, storage) is False
+async def test_no_job_means_no_work(db, storage):
+    assert await tasks.process_next_job(db, storage) is False
 
 
-def test_worker_loop_works_until_told_to_stop(session_factory, monkeypatch):
+async def test_worker_loop_works_until_told_to_stop(session_factory, monkeypatch):
     """Runs the real loop: a job, then an idle poll, then SIGTERM stops it cleanly."""
     handlers, events = {}, []
 
-    def next_job(db, storage):
+    async def record(event):
+        events.append(event)
+
+    async def next_job(db, storage):
         events.append("job")
         if events.count("job") == 1:
             return True  # did some work: look again at once
@@ -68,26 +71,24 @@ def test_worker_loop_works_until_told_to_stop(session_factory, monkeypatch):
     )
     monkeypatch.setattr(worker, "setup_logging", lambda level: None)
     monkeypatch.setattr(worker, "SessionLocal", session_factory)
-    monkeypatch.setattr(worker, "reset_stuck_jobs", lambda db: events.append("reset"))
+    monkeypatch.setattr(worker, "reset_stuck_jobs", lambda db: record("reset"))
     monkeypatch.setattr(worker, "process_next_job", next_job)
     monkeypatch.setattr(worker, "daily_tasks_due", lambda: events.count("job") == 1)
-    monkeypatch.setattr(
-        worker, "run_daily_tasks", lambda db, storage, client: events.append("daily")
-    )
-    monkeypatch.setattr(worker.time, "sleep", lambda seconds: events.append("sleep"))
+    monkeypatch.setattr(worker, "run_daily_tasks", lambda db, storage, client: record("daily"))
+    monkeypatch.setattr(worker.asyncio, "sleep", lambda seconds: record("sleep"))
 
-    worker.main()
+    await worker.main()
     assert set(handlers) == {worker.signal.SIGTERM, worker.signal.SIGINT}
     assert events == ["reset", "job", "daily", "job", "sleep"]
 
 
-def test_daily_tasks_apply_salaries_that_became_due(
+async def test_daily_tasks_apply_salaries_that_became_due(
     db, storage, admin, make_employee, frozen_clock
 ):
-    e = make_employee(salary="80000")
+    e = await make_employee(salary="80000")
     raise_ = SalaryChangeIn(version=1, amount="90000", effective_date="2026-11-01", reason="merit")
-    employees.change_salary(db, admin, e.id, raise_)
+    await employees.change_salary(db, admin, e.id, raise_)
     frozen_clock.set(datetime(2026, 11, 1, 9, tzinfo=UTC))  # before the rate fetch hour
-    tasks.run_daily_tasks(db, storage, counting_client([]))
-    db.refresh(e)
+    await tasks.run_daily_tasks(db, storage, counting_client([]))
+    await db.refresh(e)
     assert e.current_salary == 90000
