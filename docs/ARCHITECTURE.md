@@ -86,6 +86,7 @@ backend/tests/     unit (services) + API (TestClient, temp SQLite)
 | **Rate limiting** | `slowapi` per signed-in user (login per IP, 5/min): reads 120/min, writes 30/min, uploads 10/min, imports and CSV export 5/min; `429` with `Retry-After` | Redis storage via `RATE_LIMIT_STORAGE_URL` for a shared limit |
 | **Long-running work** | Imports and the daily FX fetch run in the worker container; the Postgres `import_jobs` table is the queue (`FOR UPDATE SKIP LOCKED`); the UI polls progress | More worker containers or machines; a broker only if task volume demands it |
 | **Payload size** | GZip middleware; list responses return only the columns the table needs | — |
+| **Browser caching** | `/assets/*` is cached for a year (`immutable`) because Vite hashes every name there; `index.html` is `no-cache` so a release is picked up at once. Never put files in `frontend/public/assets/`: Vite copies them unhashed into `/assets/`, and an edited file would stay cached for a year | A CDN in front honours the same headers |
 | **Aggregation** | count/sum/min/max done in SQL; medians and percentiles per group in Python over sorted values (portable SQLite/Postgres) | Postgres `percentile_cont` when on Postgres only |
 | **Frontend** | Debounced search (300 ms), server-side pagination, lazy-loaded routes, small bundle | — |
 | **Seed** | Bulk inserts in batches of 1,000; deterministic RNG; fixed FX snapshot | — |

@@ -1,6 +1,6 @@
 """Oracle: sign-in and what each role may do. Click paths are in login.md."""
 
-from oracle_kit import USERS, Checks, Oracle, Outcome, open_employee, submit_login
+from oracle_kit import USERS, Checks, Oracle, Outcome, eventually, open_employee, submit_login
 
 ORACLE = Oracle("login")
 
@@ -49,4 +49,23 @@ def viewer_cannot_change(page, ctx):
         ck.that(page.get_by_role("button", name=name).count() == 0, f"no {name!r} button")
     ck.that("HR Viewer" in page.locator("aside").inner_text(), "user menu says HR Viewer")
     ck.note(ctx.shot(page, "login-S3"))
+    return ck
+
+
+@ORACLE.scenario("S4", "signing out shows the sign-in page, and People needs a sign-in again")
+def sign_out(page, ctx):
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    ctx.sign_in(page, "admin")
+    ck = Checks()
+    page.get_by_role("button", name="Priya Sharma").click()
+    page.get_by_role("menuitem", name="Sign out").click()
+    heading = page.get_by_role("heading", name="Sign in")
+    ck.that(eventually(heading.is_visible, True), "the sign-in page is shown")
+    ck.that(not errors, f"no errors in the page: {errors}")
+    ck.note(ctx.shot(page, "login-S4"))
+    page.goto(ctx.url("/people"))
+    heading.wait_for()
+    app_menu = page.get_by_role("navigation", name="Main").count()
+    ck.that(app_menu == 0, "People shows sign-in, not the app")
     return ck

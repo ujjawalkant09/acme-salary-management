@@ -131,6 +131,8 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | The worker fetches exchange rates after 16:00 UTC, once a day | The ECB publishes around 16:00 CET |
 | Tests hash passwords with bcrypt cost 4 (the app uses the default, 12) | The full backend suite runs in ~4 s |
 | Frontend: shadcn/ui components written into `src/components/ui` by hand, `oxlint` for linting, newest package majors (React 19, React Router 8, TanStack Table 9, Vite 8) | No interactive CLI step; fast lint; current APIs |
+| Docker layers are cached between builds: in ECR under a `buildcache` tag for releases (built on a `docker-container` BuildKit builder, since Docker's default builder can't export a cache), and in the GitHub Actions cache for CI | A release after a code-only change builds in ~10 s instead of ~60 s; the cache tag is re-pushed each build, so the keep-last-10 rule never expires it, and replaced caches (untagged) are dropped after a day so they don't use up the 10 rollback slots |
+| Hashed `/assets/*` files are cached for a year (`immutable`); `index.html` is sent with `no-cache` | Asset names change with their content; a stale `index.html` after a release would point at assets that no longer exist |
 
 ## As-user oracles (15 Oct 2026)
 | Decision | Why |
@@ -142,12 +144,14 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Selectors are roles, labels and visible text; a `data-testid` only where text is fragile (`current-salary`) | Tests what a person sees and stays readable; no test ids sprinkled everywhere |
 | The browser runs in UTC | The salary form dates "today" from the browser's clock and the server uses UTC; in India between 00:00 and 05:30 a local "today" is the server's tomorrow and would be saved as an upcoming change |
 | Each role signs in once per run and later scenarios reuse its cookie | One full run signs in 4 times, under the 5-a-minute limit, so it also works against the rate-limited demo |
+| A Claude skill, `as-user-oracles`, runs and writes the oracles; it is committed (the author's call, like `aws-deploy`) | The workflow (throwaway app, probe the page, prove a new scenario can go RED) is the same each time; committed, CI tests its scripts |
+| The skill's throwaway app makes its own database, secret and random demo passwords instead of reading `backend/.env` | Data-changing scenarios never touch the dev database, it works in a fresh worktree, and no real password is read |
+| The signed-in user reaches the pages through React context set by `App`, not from the query cache | Signing out crashed the app (blank page): pages read the cache and re-rendered with no user before `App` swapped to sign-in. Found by the new oracle (login S4) |
 
 ## Test and security review (15 Oct 2026)
 | Decision | Why |
 |---|---|
 | "One open import at a time" is also a partial unique index (`uq_import_jobs_one_open`); the service's check stays for the friendly message, and two uploads at the same moment get the generic `409` | The check alone let two simultaneous uploads both through |
 | The problem-rows CSV (`errors.csv`) escapes formulas the same way as the employee export | It writes back cells exactly as uploaded, so a file from someone else could put a live formula in front of an HR Admin |
-| Only `App` reads `/auth/me`; it hands the signed-in user to the app through React context (`useUser`) | With every component reading the query, signing out re-rendered the user menu before `App` switched to sign-in, and the page went blank |
 | Frontend coverage with `@vitest/coverage-v8` (`npm run coverage`), leaving out the vendored shadcn/ui files; backend coverage with `pytest-cov` on demand (`uv run --with pytest-cov`) | Shows untested code without adding a backend dependency |
 | Kept as they are: login is limited per IP (5 a minute) and not per account; uvicorn trusts forwarded headers from any address | bcrypt keeps guessing slow; only Caddy can reach the app, and Caddy replaces `X-Forwarded-For`. Revisit if port 8000 is ever exposed |

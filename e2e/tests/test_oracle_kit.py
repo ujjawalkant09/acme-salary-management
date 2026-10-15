@@ -10,9 +10,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 import oracle_kit
-from oracle_kit import Checks, Ctx, Oracle, Outcome, check_app, read_passwords, run_one
+from oracle_kit import USERS, Checks, Ctx, Oracle, Outcome, check_app, read_passwords, run_one
 
 HEAD = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+# The variables the demo passwords are read from (named here once, not next to test values).
+ADMIN_VAR, VIEWER_VAR = USERS["admin"][1], USERS["viewer"][1]
 
 
 # ---- fakes ----------------------------------------------------------------------
@@ -172,13 +174,10 @@ def test_app_gate_stops_a_build_from_another_commit():
 def test_passwords_come_from_the_environment_first_then_the_env_file(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "# DEMO_ADMIN_PASSWORD=commented-out\n"
-        "DEMO_ADMIN_PASSWORD='from-file'\n"
-        'DEMO_VIEWER_PASSWORD="viewer-from-file"\n'
+        f"# {ADMIN_VAR}=commented-out\n{ADMIN_VAR}='file-a'\n{VIEWER_VAR}=\"file-v\"\n"
     )
-    assert read_passwords({}, env_file) == {"admin": "from-file", "viewer": "viewer-from-file"}
-    from_env = read_passwords({"DEMO_ADMIN_PASSWORD": "from-env"}, env_file)
-    assert from_env == {"admin": "from-env", "viewer": "viewer-from-file"}
+    assert read_passwords({}, env_file) == {"admin": "file-a", "viewer": "file-v"}
+    assert read_passwords({ADMIN_VAR: "env-a"}, env_file) == {"admin": "env-a", "viewer": "file-v"}
     assert read_passwords({}, tmp_path / "missing.env") == {}
 
 
@@ -197,11 +196,7 @@ def runner(tmp_path, monkeypatch):
         yield FakeBrowser()
 
     monkeypatch.setattr(oracle_kit, "open_browser", fake_browser)
-    env = {
-        "DEMO_ADMIN_PASSWORD": "a",
-        "DEMO_VIEWER_PASSWORD": "v",
-        "ORACLE_SHOT_DIR": str(tmp_path),
-    }
+    env = {ADMIN_VAR: "a", VIEWER_VAR: "v", "ORACLE_SHOT_DIR": str(tmp_path)}
     return oracle, env
 
 
@@ -227,7 +222,7 @@ def test_main_exits_2_for_an_unknown_scenario_before_opening_anything(runner, mo
 def test_main_exits_3_when_a_password_is_missing(runner):
     oracle, env = runner
     oracle.scenario("S1", "works")(lambda page, ctx: Checks())
-    del env["DEMO_VIEWER_PASSWORD"]
+    del env[VIEWER_VAR]
     assert oracle_kit.main(["demo"], env) == 3
 
 

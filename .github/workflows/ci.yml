@@ -39,18 +39,22 @@ jobs:
       - run: npm test -- --run
       - run: npm run build
 
-  # The as-user oracle harness itself (the oracles run against the real app below).
+  # The as-user oracle harness and its skill (the oracles run against the real app below).
   e2e-harness:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: e2e } }
+    env: { SKILL: ../.claude/skills/as-user-oracles }
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
+      - run: uv run ruff check . "$SKILL" --config pyproject.toml
+      - run: uv run ruff format --check . "$SKILL" --config pyproject.toml
       - run: uv run pytest
+      - run: uv run pytest "$SKILL/tests"
+      - run: uvx --from shellcheck-py shellcheck "$SKILL"/scripts/*.sh
+      - run: npx --yes bats@1.11.1 "$SKILL/tests"
 
   deploy-scripts:
     runs-on: ubuntu-latest
@@ -90,7 +94,16 @@ jobs:
         -e DEMO_VIEWER_PASSWORD=ci-viewer-password
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --build-arg GIT_COMMIT=${{ github.sha }} -t acme:ci .
+      - uses: docker/setup-buildx-action@v3
+      # Layers are cached between runs, so only what changed is rebuilt.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: acme:ci
+          load: true
+          build-args: GIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Migrate and seed twice (the second run must change nothing)
         run: |
           $RUN acme:ci alembic upgrade head

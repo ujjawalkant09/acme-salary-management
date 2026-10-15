@@ -72,7 +72,14 @@ push_image() {
   fi
   log "Building and pushing image $tag (linux/arm64)"
   aws ecr get-login-password | docker login --username AWS --password-stdin "${repo_uri%%/*}" >/dev/null
-  docker buildx build --platform linux/arm64 --build-arg GIT_COMMIT="$tag" \
+  # Layers are cached in ECR under one tag, so a release only rebuilds what changed. It is
+  # pushed on every build, so it stays the newest image and the lifecycle rule keeps it.
+  # Docker's default builder cannot export a cache, so builds use their own BuildKit container.
+  docker buildx inspect acme-builder >/dev/null 2>&1 ||
+    docker buildx create --name acme-builder --driver docker-container >/dev/null
+  docker buildx build --builder acme-builder --platform linux/arm64 --build-arg GIT_COMMIT="$tag" \
+    --cache-from "type=registry,ref=$repo_uri:buildcache" \
+    --cache-to "type=registry,ref=$repo_uri:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" \
     --tag "$repo_uri:$tag" --push "$REPO_ROOT"
 }
 

@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { renderHook, waitFor } from '@testing-library/react'
+import { renderHook, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ADMIN, mockApi } from '@/test/utils'
+import App from '@/App'
+import { ADMIN, mockApi, renderApp } from '@/test/utils'
 
 import { useLogout, useMe, UserContext, useUser } from './auth'
 import { ME_KEY } from './queryClient'
@@ -56,5 +58,21 @@ describe('the signed-in user', () => {
     result.current.mutate()
     await waitFor(() => expect(client.getQueryData(ME_KEY)).toBeNull())
     expect(client.getQueryData(['employee', 7])).toBeUndefined()
+  })
+})
+
+describe('signing out', () => {
+  it('shows the sign-in page and forgets the cached data', async () => {
+    mockApi({ 'POST /auth/logout': { status: 204 } })
+    const user = userEvent.setup()
+    const { client } = renderApp(<App />)
+    client.setQueryData(['employees', ''], { items: [] })
+
+    await user.click(screen.getByRole('button', { name: /Priya Sharma/ }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Sign out' }))
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(client.getQueryData(ME_KEY)).toBeNull()
+    expect(client.getQueryData(['employees', ''])).toBeUndefined()
   })
 })
