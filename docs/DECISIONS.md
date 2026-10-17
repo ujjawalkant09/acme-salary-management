@@ -188,3 +188,8 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Coverage traces greenlets (`concurrency = ["greenlet", "thread"]`) | Async SQLAlchemy switches greenlets; without this the same tests measured 91% and showed mark-left, edit and most of Insights as never run |
 | The seed script works out pay in `Decimal` too (pay factors, level factors, raises); only the random noise is drawn as a float and turned into a 4-place `Decimal` | "Money is never a float" now holds everywhere, seed included. The data is still the same for the same seed and date; totals moved by about 0.0005% |
 | "Recent salary changes" loads each entry's employee in the same query (a join) | It looked up each employee separately: 1 + N queries for N entries |
+
+## Frontend test folder (18 Oct 2026)
+| Decision | Why |
+|---|---|
+| Frontend tests live in `frontend/tests/`, mirroring `src/` (e.g. `src/lib/format.ts` → `tests/lib/format.test.ts`); shared helpers are in `tests/support/` and imported as `@tests/support/...` | Keeps `src/` to app code only and matches the backend's `tests/` folder. The cost is that a test is no longer next to its file, so the mirrored paths matter |
