@@ -131,6 +131,18 @@ async def recent_salary_changes(
     return await service.recent_changes(db, limit)
 
 
+@router.get("/salary-changes", response_model=Page[RecentSalaryChange])
+@limiter.limit(READ)
+async def list_salary_changes(
+    request: Request,
+    db: DB,
+    _user: CurrentUser,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+):
+    return await service.list_changes(db, page, page_size)
+
+
 # ---------- photo and documents ----------
 @router.put("/employees/{employee_id}/photo", response_model=PhotoOut)
 @limiter.limit(UPLOAD)
