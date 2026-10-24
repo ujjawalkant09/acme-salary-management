@@ -5,6 +5,7 @@ from oracle_kit import USERS, Checks, Oracle, Outcome, eventually, open_employee
 ORACLE = Oracle("login")
 
 MISMATCH = "That email and password don't match"
+MENU = ["Home", "People", "Insights", "Imports", "Salary changes"]
 
 
 @ORACLE.scenario("S1", "the HR Admin signs in and sees their name and role")
@@ -16,7 +17,7 @@ def admin_signs_in(page, ctx):
     nav.wait_for()
     menu = page.locator("aside").inner_text()
     links = nav.get_by_role("link").all_inner_texts()
-    ck.that(links == ["Home", "People", "Insights", "Imports", "Salary changes"], f"menu links are {links}")
+    ck.that(links == MENU, f"menu links are {links}")
     ck.that("Priya Sharma" in menu and "HR Admin" in menu, f"user menu reads {menu!r}")
     ck.that(page.get_by_role("button", name="Add employee").is_visible(), "Add employee is shown")
     ck.note(ctx.shot(page, "login-S1"))
