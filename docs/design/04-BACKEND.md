@@ -33,6 +33,8 @@ All under `/api/v1`. JSON; money as strings (`"184000.00"`); dates ISO-8601.
 | `POST /employees/{id}/mark-left` · `/reactivate` | Mark as left (soft delete) / undo | 30/min |
 | `GET /employees/{id}/salaries` | History, newest first | 120/min |
 | `POST /employees/{id}/salaries` | Salary change | 30/min |
+| `GET /salary-changes/recent?limit=` | Newest salary changes across everyone, with the person (Home; `limit` 1–50, default 8) | 120/min |
+| `GET /salary-changes?page=&page_size=` | Every salary change, newest first, paginated (`page_size` 1–100, default 50) | 120/min |
 | `PUT /employees/{id}/photo` · `DELETE` | Upload / remove photo (Admin) | 10/min |
 | `GET /employees/{id}/documents` | List documents | 120/min |
 | `POST /employees/{id}/documents` | Upload a document (Admin; PDF/JPG/PNG ≤ 10 MB) | 10/min |
