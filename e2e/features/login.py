@@ -16,7 +16,7 @@ def admin_signs_in(page, ctx):
     nav.wait_for()
     menu = page.locator("aside").inner_text()
     links = nav.get_by_role("link").all_inner_texts()
-    ck.that(links == ["Home", "People", "Insights", "Imports"], f"menu links are {links}")
+    ck.that(links == ["Home", "People", "Insights", "Imports", "Salary changes"], f"menu links are {links}")
     ck.that("Priya Sharma" in menu and "HR Admin" in menu, f"user menu reads {menu!r}")
     ck.that(page.get_by_role("button", name="Add employee").is_visible(), "Add employee is shown")
     ck.note(ctx.shot(page, "login-S1"))
