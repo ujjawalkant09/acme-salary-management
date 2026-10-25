@@ -242,3 +242,13 @@ export interface ImportRow {
   payload: Record<string, unknown>
   errors: { field: string; message: string }[]
 }
+
+export interface UserAccount {
+  id: number
+  email: string
+  name: string
+  role: Role
+  active: boolean
+  last_login_at: string | null
+  created_at: string | null
+}

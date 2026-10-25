@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { LIST_ITEM } from '@tests/support/fixtures'
-import { type ApiRoutes, META, mockApi, renderApp } from '@tests/support/utils'
+import { ADMIN, type ApiRoutes, META, mockApi, renderApp, VIEWER } from '@tests/support/utils'
 
 import PeoplePage from '@/pages/PeoplePage'
 
@@ -17,13 +17,13 @@ const facets = {
   employment_type: { full_time: 110, part_time: 10 },
 }
 
-function setup(route = '/people', routes: ApiRoutes = {}) {
+function setup(route = '/people', routes: ApiRoutes = {}, user = ADMIN) {
   const fetchMock = mockApi({
     'GET /employees': { items: [LIST_ITEM], page: 1, page_size: 20, total: 1, pages: 1 },
     'GET /employees/facets': facets,
     ...routes,
   })
-  const { client } = renderApp(<PeoplePage />, { route })
+  const { client } = renderApp(<PeoplePage />, { route, user })
   return { fetchMock, client, user: userEvent.setup() }
 }
 
@@ -32,6 +32,17 @@ const calledWith = (fetchMock: ReturnType<typeof mockApi>, text: string) =>
   fetchMock.mock.calls.some(([url]) => String(url).includes(text))
 
 describe('People', () => {
+  it('offers Add employee to HR Admins', async () => {
+    setup()
+    expect(await screen.findByRole('button', { name: 'Add employee' })).toBeInTheDocument()
+  })
+
+  it('hides Add employee from HR Viewers', async () => {
+    setup('/people', {}, VIEWER)
+    await screen.findByText('Asha Verma')
+    expect(screen.queryByRole('button', { name: 'Add employee' })).toBeNull()
+  })
+
   it('lists people with counts on every filter option', async () => {
     setup()
     expect(await screen.findByText('Asha Verma')).toBeInTheDocument()

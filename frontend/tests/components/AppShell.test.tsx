@@ -10,19 +10,20 @@ import { AppShell } from '@/components/AppShell'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('App shell', () => {
-  it('shows who is signed in and lets HR Admins add employees', () => {
+  it('shows who is signed in, with no Add employee in the shared header', () => {
     mockApi({})
     renderApp(<AppShell>page</AppShell>, { user: ADMIN })
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument()
     expect(screen.getByText('HR Admin')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add employee' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add employee' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Users' })).toHaveAttribute('href', '/users')
   })
 
-  it('hides Add employee from HR Viewers', () => {
+  it('hides Users from HR Viewers', () => {
     mockApi({})
     renderApp(<AppShell>page</AppShell>, { user: VIEWER })
     expect(screen.getByText('HR Viewer')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Add employee' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Users' })).toBeNull()
   })
 
   it('sends a header search to People and focuses search with /', async () => {
@@ -41,6 +42,12 @@ describe('App shell navigation', () => {
     mockApi({})
     renderApp(<AppShell>page</AppShell>, { route: '/people/7' })
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Employee')
+  })
+
+  it('names the Users page in the header', () => {
+    mockApi({})
+    renderApp(<AppShell>page</AppShell>, { route: '/users' })
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Users')
   })
 
   it('the phone menu opens, and closes on a link or a tap outside', async () => {

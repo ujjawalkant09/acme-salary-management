@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router'
 
-import { AddEmployeeDialog } from '@/components/AddEmployeeDialog'
 import { Icon, type IconName } from '@/components/icons'
 import { Logo } from '@/components/Logo'
 import { Button } from '@/components/ui/button'
@@ -17,12 +16,13 @@ import { useIsAdmin, useLogout, useUser } from '@/lib/auth'
 import { initials } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-const NAV: { to: string; label: string; icon: IconName }[] = [
+const NAV: { to: string; label: string; icon: IconName; adminOnly?: boolean }[] = [
   { to: '/', label: 'Home', icon: 'home' },
   { to: '/people', label: 'People', icon: 'users' },
   { to: '/insights', label: 'Insights', icon: 'chart' },
   { to: '/imports', label: 'Imports', icon: 'upload' },
   { to: '/changes', label: 'Salary changes', icon: 'calendar' },
+  { to: '/users', label: 'Users', icon: 'users', adminOnly: true },
 ]
 
 const TITLES: Record<string, string> = {
@@ -31,6 +31,7 @@ const TITLES: Record<string, string> = {
   '/insights': 'Insights',
   '/imports': 'Imports',
   '/changes': 'Salary changes',
+  '/users': 'Users',
 }
 
 const ROLE_LABEL = { hr_admin: 'HR Admin', hr_viewer: 'HR Viewer' } as const
@@ -78,7 +79,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Logo />
         </div>
         <nav aria-label="Main" className="flex flex-col gap-0.5">
-          {NAV.map((item) => (
+          {NAV.filter((item) => isAdmin || !item.adminOnly).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -138,7 +139,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               </kbd>
             </form>
           )}
-          {isAdmin && <AddEmployeeDialog />}
         </header>
         <main className="w-full px-4 pt-5 pb-10 md:px-8 md:pt-7 md:pb-14">{children}</main>
       </div>

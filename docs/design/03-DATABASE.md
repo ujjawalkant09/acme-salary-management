@@ -17,7 +17,7 @@ erDiagram
 
     COUNTRIES { char2 code PK; text name; char3 currency }
     DEPARTMENTS { int id PK; text name UK }
-    USERS { int id PK; text email UK; text name; text password_hash; text role; bool active; timestamp last_login_at }
+    USERS { int id PK; text email UK; text name; text password_hash; text role; bool active; timestamp last_login_at; timestamp created_at; int created_by FK; int session_version }
     FX_RATES { char3 currency PK; date rate_date PK; numeric usd_per_unit; text source }
     EMPLOYEE_DOCUMENTS { int id PK; int employee_id FK; text kind; text file_name; text content_type; int size_bytes; text storage_key; int uploaded_by FK; timestamp uploaded_at; timestamp deleted_at }
     EMPLOYEES {
@@ -100,6 +100,8 @@ Rows are **never updated or deleted**; a mistake gets a new `correction` record.
 | `role` | enum `hr_admin` / `hr_viewer` | Q01 |
 | `active` | bool | Disable without deleting history |
 | `last_login_at` | timestamptz | |
+| `created_at`, `created_by` | timestamptz, FK → users | Who added the account and when; `NULL` for accounts from before migration 0005 |
+| `session_version` | int, default 0 | Saved in the session at sign-in; a password reset or disabling bumps it, which ends every existing session |
 
 ### `employee_documents`
 | Column | Type | Notes |

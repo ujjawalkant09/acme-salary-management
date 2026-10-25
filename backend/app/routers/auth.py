@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, Response
 
-from app.core.auth import DB, SESSION_USER_KEY, CurrentUser
+from app.core.auth import DB, SESSION_USER_KEY, SESSION_VERSION_KEY, CurrentUser
 from app.core.rate_limit import LOGIN, READ, limiter
 from app.schemas import LoginIn, UserOut
 from app.services import auth as service
@@ -14,6 +14,7 @@ async def login(request: Request, body: LoginIn, db: DB):
     user = await service.login(db, body.email, body.password)
     request.session.clear()
     request.session[SESSION_USER_KEY] = user.id
+    request.session[SESSION_VERSION_KEY] = user.session_version
     return user
 
 

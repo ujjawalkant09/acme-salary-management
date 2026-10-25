@@ -24,6 +24,8 @@ All under `/api/v1`. JSON; money as strings (`"184000.00"`); dates ISO-8601.
 | Method & path | Purpose | Rate limit |
 |---|---|---|
 | `POST /auth/login` · `POST /auth/logout` · `GET /auth/me` | Session login; current user and role | 5/min on login |
+| `GET /users` · `POST /users` | HR Admin only: list sign-in accounts; add one (`Idempotency-Key`) | 120/min · 30/min |
+| `PUT /users/{id}/role` · `PUT /users/{id}/active` · `PUT /users/{id}/password` · `DELETE /users/{id}` | HR Admin only, never on their own account: change role, disable / enable, reset the password (signs them out), delete an account that never changed anything (`409` otherwise) | 30/min |
 | `GET /health` | Liveness + DB check | none |
 | `GET /meta` | Countries, departments, titles, levels, FX table, data version | 120/min |
 | `GET /employees` | List: `q, country, department_id, job_title, level, status, employment_type, sort, order, page, page_size` | 120/min |
@@ -157,7 +159,7 @@ A `Storage` interface: `put(key, bytes)`, `get(key)`, `delete(key)`, `url(key)`.
 - CORS restricted to the app origin; security headers (CSP, `X-Content-Type-Options`, `Referrer-Policy`).
 - **No salary or PII in logs**; request logs record path, status, timing and request id only.
 - Secrets from environment variables only.
-- **Login**: email and password with two roles; the demo has one account per role. Passwords are stored only as hashes in the `users` table (demo users are created by the seed from secrets); login sets a signed, `HttpOnly`, `Secure`, `SameSite=Lax` session cookie; the login endpoint has a strict rate limit (5/min) against guessing.
+- **Login**: email and password with two roles; the demo has one account per role. Passwords are stored only as hashes in the `users` table (demo users are created by the seed from secrets; HR Admins add others on the Users page); login sets a signed, `HttpOnly`, `Secure`, `SameSite=Lax` session cookie; the login endpoint has a strict rate limit (5/min) against guessing.
 - Auth is a seam: every endpoint depends on `get_current_user`; adding SSO later only changes how that user is found.
 - Uploads (photos, documents, imports): size limit, magic-byte type check, allowed types only (PDF, JPG, PNG; XLSX/CSV for imports), random storage keys, files never served from the app's own domain path without `Content-Disposition: attachment`.
 - Gender is excluded from list responses and CSV export by the response schemas, not by the UI.

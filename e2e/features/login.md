@@ -10,7 +10,7 @@ Sign-in and what each role may do. Run: `uv run python oracle_kit.py login`
 | S4 | signing out shows the sign-in page, and People needs a sign-in again | no |
 
 ## Click paths
-- **S1.** Open `/`. Enter `priya.sharma@acme.example` and the admin password, click **Sign in**. The side menu shows Home, People, Insights, Imports, Salary changes; the user menu at the bottom shows "Priya Sharma, HR Admin"; the header has **Add employee**.
+- **S1.** Open `/`. Enter `priya.sharma@acme.example` and the admin password, click **Sign in**. The side menu shows Home, People, Insights, Imports, Salary changes, Users; the user menu at the bottom shows "Priya Sharma, HR Admin"; Home has no **Add employee** button. Click **People**: the toolbar above the table has **Add employee**.
 - **S2.** Open `/`. Enter the admin email and the password `not-the-password`, click **Sign in**. Under the form: "That email and password don't match…". The side menu does not appear.
 - **S3.** Sign in as `arjun.mehta@acme.example`. On People search `ACM-000010` and open Siddharth Reddy. The salary is shown; there is no **Change salary**, **Edit details**, **Mark as left** or **Add employee** button; the user menu says HR Viewer.
 - **S4.** Sign in as the admin. Open the user menu at the bottom of the side menu (Priya Sharma) and choose **Sign out**. The sign-in page shows straight away (not a blank page), and the browser console has no errors. Open `/people`: the sign-in page shows, not the app.

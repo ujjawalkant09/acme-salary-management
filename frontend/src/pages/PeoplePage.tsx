@@ -5,12 +5,14 @@ import { useSearchParams } from 'react-router'
 import { FilterPanel } from '@/features/people/FilterPanel'
 import { filterChips } from '@/features/people/filterChips'
 import { PeopleTable } from '@/features/people/PeopleTable'
+import { AddEmployeeDialog } from '@/components/AddEmployeeDialog'
 import { Icon } from '@/components/icons'
 import { Pager } from '@/components/Pager'
 import { EmptyState, ErrorState, PageLoading, Spinner } from '@/components/states'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api, API_BASE } from '@/lib/api'
+import { useIsAdmin } from '@/lib/auth'
 import { count } from '@/lib/format'
 import { useMeta } from '@/lib/meta'
 import {
@@ -33,6 +35,7 @@ export default function PeoplePage() {
   const [showFilters, setShowFilters] = useState(false)
   const [mobileFilters, setMobileFilters] = useState(false)
   const meta = useMeta()
+  const isAdmin = useIsAdmin()
 
   const listQuery = toSearchParams(params).toString()
   const filterQuery = filterParams(params).toString()
@@ -113,6 +116,7 @@ export default function PeoplePage() {
               Export CSV
             </a>
           </Button>
+          {isAdmin && <AddEmployeeDialog />}
         </div>
 
         <div className="mb-3 flex min-h-[1.875rem] flex-wrap items-center gap-1.5">
