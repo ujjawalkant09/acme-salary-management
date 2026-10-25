@@ -28,7 +28,6 @@ def upgrade() -> None:
         "import_jobs",
         [sa.text("(1)")],
         unique=True,
-        sqlite_where=sa.text(OPEN),
         postgresql_where=sa.text(OPEN),
     )
 

@@ -1,0 +1,21 @@
+# Local Postgres for development and tests: docker compose up -d --wait db
+# The app's database is `acme`; the tests and the oracles make their own on the same server.
+# A fixed project name, so a git worktree uses this same container instead of a second one.
+name: acme
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: acme
+      POSTGRES_PASSWORD: acme
+      POSTGRES_DB: acme
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "acme", "-d", "acme"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:

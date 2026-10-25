@@ -32,7 +32,8 @@ uv run playwright install chromium
 **Against a throwaway app** (needed for the salary scenarios, which change data). Secrets and passwords come from `backend/.env`:
 ```bash
 cd frontend && npm run build && cd ../backend
-export DATABASE_URL=sqlite:////tmp/acme-oracles.db STORAGE_DIR=/tmp/acme-oracles-files RATE_LIMIT_ENABLED=false
+docker compose exec -T db psql -U acme -d postgres -c 'DROP DATABASE IF EXISTS acme_oracles WITH (FORCE)' -c 'CREATE DATABASE acme_oracles'
+export DATABASE_URL=postgresql+psycopg://acme:acme@localhost:5432/acme_oracles STORAGE_DIR=/tmp/acme-oracles-files RATE_LIMIT_ENABLED=false
 uv run alembic upgrade head && uv run python -m scripts.seed --count 1000 --reset
 uv run uvicorn app.main:app --port 8100
 ```

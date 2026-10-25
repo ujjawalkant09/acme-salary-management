@@ -7,7 +7,7 @@
 |------|--------|-----------|
 | API | **Python 3.12, FastAPI** + Pydantic v2 | Typed validation, auto OpenAPI docs, little boilerplate |
 | ORM / migrations | **SQLAlchemy 2.0** (asyncio, `AsyncSession`) + **Alembic** | Mature, explicit, portable; async endpoints don't hold a thread while waiting on the database |
-| DB | **PostgreSQL** (Docker locally and on the server); SQLite only for fast unit tests | Same engine in development and production; CI also runs the tests on Postgres |
+| DB | **PostgreSQL** everywhere: local development and tests (Docker), CI and the server | Same engine in development, tests and production |
 | UI | **React + Vite + TypeScript**, **shadcn/ui** (Tailwind + Radix), TanStack Table + Query, Recharts | One light styling system; we own the component code |
 | Tooling | uv, ruff, pytest; Vitest + Testing Library; GitHub Actions | Fast, standard |
 | Containers | **Docker** multi-stage image (builds the UI, serves it from FastAPI); the same image runs the web app and the worker; `docker compose` for local dev | One-command setup that matches production |
@@ -72,7 +72,7 @@ backend/app/
   routers/         HTTP only
   worker/          job runner (`python -m app.worker`)
 backend/scripts/seed.py
-backend/tests/     unit (services) + API (TestClient, temp SQLite)
+backend/tests/     unit (services) + API (TestClient, a fresh Postgres database per test)
 ```
 
 ## Design principles
@@ -88,7 +88,7 @@ backend/tests/     unit (services) + API (TestClient, temp SQLite)
 | **Long-running work** | Imports and the daily FX fetch run in the worker container; the Postgres `import_jobs` table is the queue (`FOR UPDATE SKIP LOCKED`); the UI polls progress | More worker containers or machines; a broker only if task volume demands it |
 | **Payload size** | GZip middleware; list responses return only the columns the table needs | — |
 | **Browser caching** | `/assets/*` is cached for a year (`immutable`) because Vite hashes every name there; `index.html` is `no-cache` so a release is picked up at once. Never put files in `frontend/public/assets/`: Vite copies them unhashed into `/assets/`, and an edited file would stay cached for a year | A CDN in front honours the same headers |
-| **Aggregation** | count/sum/min/max done in SQL; medians and percentiles per group in Python over sorted values (portable SQLite/Postgres) | Postgres `percentile_cont` when on Postgres only |
+| **Aggregation** | count/sum/min/max done in SQL; medians and percentiles per group in Python over sorted values | Postgres `percentile_cont` |
 | **Frontend** | Debounced search (300 ms), server-side pagination, lazy-loaded routes, small bundle | — |
 | **Seed** | Bulk inserts in batches of 1,000; deterministic RNG; fixed FX snapshot | — |
 

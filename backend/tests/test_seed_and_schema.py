@@ -6,14 +6,14 @@ from decimal import Decimal
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select
+from sqlalchemy import make_url, select, text
 
 from app.core.config import get_settings
 from app.models import Department, Employee, FxRate, SalaryRecord, User
 from app.repositories import employees as repo
 from app.schemas import EmployeeFilters
 from scripts import seed as seed_script
-from tests.conftest import BACKEND, count
+from tests.conftest import BACKEND, TEST_DATABASE_URL, count, recreate_database
 
 AS_OF = date(2026, 10, 14)
 
@@ -112,21 +112,37 @@ async def test_seed_command_line(session_factory, monkeypatch, capsys):
         assert await count(db, Employee) == 5
 
 
-# SQLite can't reflect expression indexes, so Alembic skips comparing them. The plan tests
-# below and test_two_uploads_at_once_still_open_only_one_import check the migrations made them.
-@pytest.mark.filterwarnings("ignore:.*expression-based index")
-def test_models_match_the_migration(template_db):
-    """Fails if a model changed without a new Alembic migration."""
+def _alembic(url: str) -> Config:
     config = Config(str(BACKEND / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{template_db}")
+    config.set_main_option("sqlalchemy.url", url)
+    return config
+
+
+def test_models_match_the_migration(template_db):
+    """Fails if a model changed without a new Alembic migration."""
+    command.check(_alembic(template_db))
+
+
+def test_every_migration_downgrades_and_upgrades_again(admin_connection):
+    url = make_url(TEST_DATABASE_URL)
+    url = url.set(database=f"{url.database}_migrations")
+    recreate_database(admin_connection, url.database)
+    config = _alembic(url.render_as_string(hide_password=False))
+    command.upgrade(config, "head")
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
     command.check(config)
 
 
 async def _query_plan(db, sql: str) -> str:
+    """The plan for `sql` when an index can serve it. The test tables are tiny, so
+    Postgres would otherwise read them whole and sort, which tells us nothing."""
     connection = await db.connection()
-    result = await connection.exec_driver_sql(f"EXPLAIN QUERY PLAN {sql}")
-    return str(result.fetchall())
+    await connection.exec_driver_sql("SET LOCAL enable_seqscan = off")
+    await connection.exec_driver_sql("SET LOCAL enable_sort = off")
+    result = await connection.exec_driver_sql(f"EXPLAIN {sql}")
+    return "\n".join(row[0] for row in result)
 
 
 async def test_list_query_uses_the_name_index(db):
@@ -134,7 +150,11 @@ async def test_list_query_uses_the_name_index(db):
     assert "ix_employees_name" in plan
 
 
-async def test_job_title_filter_uses_the_lower_case_index(db):
+async def test_job_title_filter_uses_the_lower_case_index(db, make_employee):
+    # With statistics, the planner sees one title is rarer than "active" is.
+    for n in range(20):
+        await make_employee(job_title=f"Title {n}")
+    await db.execute(text("ANALYZE employees"))
     query = repo.apply_filters(select(Employee), EmployeeFilters(job_title=" DevOps Engineer"))
     sql = query.compile(dialect=db.bind.dialect, compile_kwargs={"literal_binds": True})
     assert "ix_employees_job_title_lower" in await _query_plan(db, str(sql))
@@ -144,5 +164,5 @@ async def test_recent_salary_changes_use_the_created_index(db):
     plan = await _query_plan(
         db, "SELECT id FROM salary_records ORDER BY created_at DESC, id DESC LIMIT 10"
     )
-    assert "ix_salary_records_created" in plan
-    assert "TEMP B-TREE" not in plan  # read in index order, no sort of the whole table
+    assert "Scan Backward using ix_salary_records_created" in plan
+    assert "Sort" not in plan  # read in index order, no sort of the whole table

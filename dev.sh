@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run the whole app locally: API (:8000), worker and frontend (:5173). Ctrl+C stops all three.
+# Run the whole app locally: Postgres (Docker), API (:8000), worker and frontend (:5173).
+# Ctrl+C stops the last three; the database keeps running (docker compose stop db).
 #   ./dev.sh           install, migrate, seed an empty database, then start
 #   ./dev.sh --fast    skip install/migrate/seed and just start
 #
@@ -14,7 +15,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
 
-for tool in uv npm; do
+for tool in docker uv npm; do
   command -v "$tool" >/dev/null || { echo "Missing '$tool'. See README.md 'Run it locally'." >&2; exit 1; }
 done
 
@@ -23,6 +24,9 @@ if [[ ! -f "$BACKEND/.env" ]]; then
   echo "Created backend/.env from .env.example. Set SECRET_KEY and the two demo passwords, then run again." >&2
   exit 1
 fi
+
+echo "==> Database: Postgres in Docker"
+(cd "$ROOT" && docker compose up -d --wait db)
 
 if [[ "${1:-}" != "--fast" ]]; then
   echo "==> Backend: install, migrate, seed"

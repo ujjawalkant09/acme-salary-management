@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "ACME Pay: salary management API"
 requires-python = ">=3.12"
 dependencies = [
-    "aiosqlite>=0.22.1",
     "alembic>=1.20.0",
     "bcrypt>=5.0.0",
     "cachetools>=7.2.1",

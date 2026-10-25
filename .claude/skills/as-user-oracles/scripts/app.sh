@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# A throwaway copy of ACME Pay for the as-user oracles: its own SQLite database (1,000 seeded
-# employees), its own file storage, its own random secret and demo passwords, and no rate limit.
-# It never touches backend/acme.db or backend/.env, so it also works in a fresh worktree.
+# A throwaway copy of ACME Pay for the as-user oracles: its own database (acme_oracles_<port> on
+# the local Postgres, 1,000 seeded employees), its own file storage, its own random secret and
+# demo passwords, and no rate limit. It never touches the `acme` database or backend/.env, so it
+# also works in a fresh worktree.
 #
 #   app.sh start              build the UI, create and seed a new database, start the app
 #   app.sh run [args…]        run the oracles against it, data changes allowed (default: all)
@@ -60,11 +61,18 @@ start() {
   (cd "$ROOT/frontend" && { [[ -d node_modules ]] || npm ci --silent; } && npm run build) \
     >"$DATA/build.log" 2>&1 || die "the UI build failed, see $DATA/build.log"
 
-  export DATABASE_URL="sqlite:///$DATA/acme.db" STORAGE_DIR="$DATA/storage" \
+  local db="acme_oracles_$PORT"
+  echo "creating the database ${db}…"
+  (cd "$ROOT" && docker compose up -d --wait db &&
+    docker compose exec -T db psql -U acme -d postgres -q \
+      -c "DROP DATABASE IF EXISTS $db WITH (FORCE)" -c "CREATE DATABASE $db") \
+    >"$DATA/db.log" 2>&1 || die "could not create the database (is Docker running?), see $DATA/db.log"
+
+  export DATABASE_URL="postgresql+psycopg://acme:acme@localhost:5432/$db" STORAGE_DIR="$DATA/storage" \
     SECRET_KEY="$secret" SESSION_COOKIE_SECURE=false RATE_LIMIT_ENABLED=false \
     FRONTEND_DIST="$ROOT/frontend/dist" DEMO_ADMIN_PASSWORD="$admin" DEMO_VIEWER_PASSWORD="$viewer"
   cd "$ROOT/backend"
-  echo "creating and seeding the database…"
+  echo "migrating and seeding the database…"
   {
     uv sync --frozen --quiet
     .venv/bin/alembic upgrade head

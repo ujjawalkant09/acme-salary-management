@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core import cache
 from app.core.clock import now, today
@@ -461,7 +462,10 @@ async def change_salary(
     db.add(record)
     apply_salary_record(employee, record, await fx.rates_in_use(db))
     employee.updated_by = user.id
-    employee.updated_at = now()  # always a new version, even for a future-dated change
+    employee.updated_at = now()
+    # Always a new version, even for a future-dated change that leaves every other column
+    # as it was (and even if `now()` equals the stored time).
+    flag_modified(employee, "updated_at")
     await cache.bump_data_version(db)
     await db.commit()
     return await profile(db, employee)

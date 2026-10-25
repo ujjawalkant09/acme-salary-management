@@ -6,7 +6,7 @@
 - Every database call is awaited. A forgotten `await` fails the tests (pytest turns the "never awaited" warning into an error).
 - An async session can't load data when an attribute is read. Relationships are loaded with the query (`lazy="joined"`) or with `refresh()` after a write, and nothing reads an ORM object after a rollback without reloading it.
 - Slow work that isn't database I/O (bcrypt, Pillow, building the xlsx template, reading and writing files) runs with `asyncio.to_thread`, so it never blocks the loop.
-- `DATABASE_URL` keeps its sync form, which Alembic uses. The app runs SQLite on aiosqlite and `postgresql+psycopg` on psycopg's own async mode.
+- `DATABASE_URL` keeps its sync form (`postgresql+psycopg://…`), which Alembic uses; the app runs it on psycopg's own async mode.
 
 ## 1. Layers
 ```
@@ -172,7 +172,7 @@ Structured JSON logs with a `request_id` (also returned as `X-Request-ID`), requ
 | Level | What | Tooling |
 |-------|------|---------|
 | Unit | Insights maths (median, percentiles, IQR outliers), FX conversion, import row validation, salary-change rules | pytest, pure functions, no DB |
-| Service/repo | Filters, sort, pagination, current-salary consistency, optimistic locking | pytest + temporary SQLite per test (transaction rollback) |
+| Service/repo | Filters, sort, pagination, current-salary consistency, optimistic locking | pytest + a fresh Postgres database per test (cloned from a migrated template) |
 | API | Status codes, error shapes, 429, ETag/304, import job lifecycle (worker run synchronously in tests) | FastAPI `TestClient` |
 | Frontend | Key components: directory filters, salary form, import preview | Vitest + Testing Library |
 

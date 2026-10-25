@@ -9,12 +9,13 @@ Web app for an HR Manager to manage and analyze salaries for 10,000 employees ac
 - AI usage log: [docs/AI_USAGE.md](docs/AI_USAGE.md)
 
 ## Run it locally
-Needs Python 3.12 with [uv](https://docs.astral.sh/uv/), and Node 26 with npm. Locally the app runs on SQLite; the production image (`Dockerfile`) runs on Postgres.
+Needs Python 3.12 with [uv](https://docs.astral.sh/uv/), Node 26 with npm, and Docker. The app and the tests run on PostgreSQL, as in production: `docker compose up -d --wait db` starts it locally (`dev.sh` does this for you).
 
-**One command:** `./dev.sh` installs, migrates, seeds an empty database and starts the API, the worker and the frontend together (Ctrl+C stops all three). `./dev.sh --fast` skips the setup and just starts them. The steps it runs are below.
+**One command:** `./dev.sh` starts Postgres, installs, migrates, seeds an empty database and starts the API, the worker and the frontend together (Ctrl+C stops those three; `docker compose stop db` stops the database). `./dev.sh --fast` skips the setup and just starts them. The steps it runs are below.
 
 **Backend** (API on http://localhost:8000, docs at `/api/v1/docs`)
 ```bash
+docker compose up -d --wait db   # Postgres on localhost:5432 (data kept in a Docker volume)
 cd backend
 uv sync
 cp .env.example .env              # then set SECRET_KEY and the two demo passwords
@@ -45,6 +46,7 @@ From GitHub: **Actions > Deploy > Run workflow** runs every check and releases `
 ```
 
 ## Checks
+The backend tests need the local Postgres running; each test gets its own fresh database (`acme_test`, cloned from a migrated template), so your `acme` data is never touched.
 ```bash
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest --cov
 cd frontend && npm run lint && npm run typecheck && npm run coverage && npm run build
