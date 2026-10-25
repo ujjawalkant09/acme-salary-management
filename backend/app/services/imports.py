@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
@@ -44,7 +44,7 @@ from app.services.import_file import COLUMNS, file_kind, read_rows
 log = logging.getLogger(__name__)
 
 CHUNK = 500
-# Longer than any single step without a heartbeat (applying the largest file allowed).
+# Much longer than the gap between heartbeats (one per CHUNK rows, checking or applying).
 STUCK_AFTER = timedelta(minutes=15)
 UPDATE_REASONS = ("promotion", "merit", "market_adjustment", "correction", "other")
 # Detail fields an import can change on an existing employee.
@@ -483,8 +483,10 @@ async def apply_job(db: AsyncSession, job: ImportJob) -> None:
             .order_by(ImportRow.row_number)
         )
     )
-    created = updated = 0
-    for row in rows:
+    created = updated = skipped = 0
+    for number, row in enumerate(rows):
+        if number and number % CHUNK == 0:
+            await _heartbeat(db, job.id)
         payload = row.payload
         employee = (
             await db.get(Employee, payload["employee_id"]) if row.action == "update" else None
@@ -498,7 +500,7 @@ async def apply_job(db: AsyncSession, job: ImportJob) -> None:
                 )
             row.action = "error"
             row.errors = [{"field": column, "message": message}]
-            job.error_count += 1
+            skipped += 1
             continue
         if employee is None:
             employee = await _create_from_row(db, job, payload, rates)
@@ -510,11 +512,24 @@ async def apply_job(db: AsyncSession, job: ImportJob) -> None:
             updated += 1
         email_owner[employee.email] = employee.id
 
+    # The job row is written only here: a write earlier in this transaction would lock it
+    # and make `_heartbeat` wait for this transaction forever.
     job.created_count, job.updated_count = created, updated
+    job.error_count += skipped
     job.status = "completed"
     job.finished_at = now()
     await cache.bump_data_version(db)
     await db.commit()
+
+
+async def _heartbeat(db: AsyncSession, job_id: str) -> None:
+    """Show other workers this job is alive. Uses a connection of its own, because the
+    apply transaction commits only at the end and its writes are invisible until then."""
+    async with db.bind.connect() as connection:
+        await connection.execute(
+            update(ImportJob).where(ImportJob.id == job_id).values(heartbeat_at=now())
+        )
+        await connection.commit()
 
 
 def _changed_since_check(
