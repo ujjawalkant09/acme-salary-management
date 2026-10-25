@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.core.db import get_db, make_engine
+from app.core.db import engine, get_db
 from app.main import create_app
 
 
@@ -92,11 +92,6 @@ async def test_request_session_is_rolled_back_and_closed(monkeypatch):
     assert calls == ["rollback", "close"]
 
 
-@pytest.mark.parametrize(
-    ("url", "driver"),
-    [("sqlite:///acme.db", "aiosqlite"), ("postgresql+psycopg://acme:pw@db:5432/acme", "psycopg")],
-)
-def test_database_url_gets_an_async_driver(url, driver):
-    """`DATABASE_URL` keeps the sync form Alembic uses; the app runs it on an async driver."""
-    dialect = make_engine(url).dialect
-    assert (dialect.driver, dialect.is_async) == (driver, True)
+def test_database_url_gets_an_async_driver():
+    """`DATABASE_URL` keeps the sync form Alembic uses; the app runs it on psycopg's async mode."""
+    assert (engine.dialect.driver, engine.dialect.is_async) == ("psycopg", True)

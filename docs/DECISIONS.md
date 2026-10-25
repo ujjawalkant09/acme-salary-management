@@ -86,7 +86,7 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Decision | Why |
 |---|---|
 | Python 3.12, FastAPI, SQLAlchemy 2.0, Alembic, Pydantic v2 | The role's language; typed and fast |
-| PostgreSQL everywhere (Docker locally); SQLite only for fast unit tests; CI also runs tests on Postgres | Same engine in dev and prod |
+| PostgreSQL everywhere: local development, tests, CI and production (see "Postgres only" below) | Same engine in dev and prod |
 | React + Vite + TypeScript; shadcn/ui only; TanStack Table and Query; Recharts | One light styling system |
 | Docker for local development and deployment | One-command setup matching production |
 | Public GitHub repo; GitHub Actions builds the image, pushes to ECR (OIDC, no stored keys) and deploys with SSM Run Command (no SSH port open); secrets in SSM Parameter Store; first setup and every manual deploy through one command, `.claude/skills/aws-deploy/scripts/deploy.sh` (see below) | Simple and secure. Frontend served by the same server (same origin: no CORS, simple secure cookies); S3 + CloudFront for the frontend is on the documented scaling path. Rejected: App Runner (closed to new customers since 30 April 2026), ECS Express Mode + RDS (load balancer, cluster and managed DB are more than this app needs) |
@@ -95,7 +95,7 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Deployment code lives in the skill folder `.claude/skills/aws-deploy/`, not a separate `deploy/` folder; the other skills stay git-ignored, and `aws-deploy` may be pushed when GitHub Actions needs it (its `config.env` stays ignored) | Author | The author wants the deploy run as Claude skills; GitHub can only run code that is in the repo |
 | **GitHub Deploy button** (manual `workflow_dispatch` on `main`) runs all CI checks, then `deploy.sh --release`; not automatic on every push | Author | The demo server is off most of the time; a button starts it, deploys and keeps the 4-hour auto-stop. Every push still runs CI |
 | The GitHub OIDC role can only release (push the image, sync server scripts, start the server, send SSM commands); infrastructure, IAM and secret changes run only from the author's laptop | Security | A leaked or misused workflow can't widen its own access, create resources or read secrets. The role trusts GitHub's ID-based subject (`repo:owner@id/repo@id:environment:production`), so a renamed or re-created repo with the same name can't use it |
-| CI runs the real image against Postgres, besides the SQLite unit tests | A Postgres-only bug | The worker's job claim failed only on Postgres; SQLite ignores `FOR UPDATE` |
+| CI runs the real image against Postgres, besides the unit tests | A Postgres-only bug | The worker's job claim failed only on Postgres; the SQLite tests of the time ignored `FOR UPDATE` |
 | Every deploy runs `python -m scripts.seed --if-empty` after migrations: a fresh database gets the 10,000 demo employees and two logins, an existing one is left alone | Deploy design | One deploy command sets up a new server completely, and re-running it can never overwrite real data |
 | **Demo server is off when unused:** `server.sh stop` backs up then stops; `server.sh start` turns it on and it backs up and stops itself after 4 hours | Author | Cuts the cost to about $6/month while idle; the Elastic IP keeps the address, so DNS never changes |
 | **$10 monthly AWS budget alert** (email at 80% actual and 100% forecast) | Author | Early warning if a server is left running; it is an alert, not a cap |
@@ -163,8 +163,7 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Decision | Why |
 |---|---|
 | `async def` endpoints and SQLAlchemy `AsyncSession` throughout: API, services, repositories, the worker loop (with `httpx.AsyncClient`) and the seed script. Replaces the first sync design | Author's choice. One event loop serves requests that are waiting on the database without a thread each. Measured with ApacheBench (one uvicorn process, Postgres 16, 10,000 employees, single runs on a laptop): 13–43% more requests a second at 10–50 at once, no clear difference one at a time, slower slowest-5% (p95) at 50+. At 100 at once the sync server stalled: its 40 threads waited on 15 database connections and requests failed after 30 s; async served all of them. At the expected load (about 5 people) both answer in 5–25 ms |
-| `DATABASE_URL` keeps its sync form (`sqlite:///…`, `postgresql+psycopg://…`); the app maps SQLite to `aiosqlite`, and psycopg runs in its own async mode | Alembic, the deploy configs and every `.env` stay as they are |
-| SQLite connections are not pooled (`NullPool`) | A SQLite connection is cheap to open, and an aiosqlite connection belongs to the event loop that opened it (the test client runs the app on its own loop) |
+| `DATABASE_URL` keeps its sync form (`postgresql+psycopg://…`); psycopg runs it in its own async mode | Alembic, the deploy configs and every `.env` stay as they are |
 | bcrypt, Pillow, building the xlsx template and file reads/writes run in a thread (`asyncio.to_thread`) | A slow call on the event loop would hold up every other request |
 | After a write, the service reloads the employee (`refresh()`) before building the response | An async session can't load the department on first access; this also fixed a bug in the sync version, where moving someone to another department returned the old department's name |
 | `Idempotency-Key` handling reads the user's id before running the work | A rollback expires every loaded object; the sync session reloaded it silently, the async one raised (`MissingGreenlet`), so a race on the same key would have returned a 500 |
@@ -202,3 +201,14 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | The page number lives in the URL (`?page=2`); a bad value is page 1; a page past the end shows a link back to page 1 | Refresh, Back and shared links keep the page, as on People |
 | The People page's `Pager` moved to `components/Pager.tsx` | It now has two users, People and Salary changes |
 | `dev.sh` starts the API, the worker and the frontend in one terminal (`--fast` skips install, migrate and seed) | Three terminals were needed to run the app locally; the separate commands still work and are listed in the script and the README |
+
+## Postgres only (26 Oct 2026)
+| Decision | Why |
+|---|---|
+| SQLite removed: local development, the tests and CI all run on PostgreSQL 16 (`docker-compose.yml` at the root; `dev.sh` starts it). `DATABASE_URL` has no default | Author's choice. SQLite accepted what Postgres rejects (too-long text, wrong types, missing functions) and needed its own code paths (aiosqlite, `NullPool`, foreign-key pragma, naive datetimes, `sqlite_where`, batch migrations), so a change could pass locally and fail on the server |
+| Each test gets a fresh database cloned from a migrated template (`CREATE DATABASE … TEMPLATE … STRATEGY FILE_COPY`, about 40 ms) | Same isolation as the old copied SQLite file, without cleanup code that must know about the reference rows migration 0001 inserts. Truncating tables would have wiped them |
+| The tests' async engine is not pooled (`NullPool`); the app's is | The test client runs the app on an event loop of its own, and an async connection belongs to the loop that opened it |
+| Migrations use plain `op.*` calls; `render_as_batch` is off. 0001–0003 were rewritten from batch blocks | Batch mode exists only for SQLite's limited `ALTER TABLE`. The rewritten files produce a byte-identical `pg_dump --schema-only` at 0004, so databases already migrated are unaffected |
+| A test runs every migration down to base and back up | Catches a `downgrade()` that only works on one engine, such as an unnamed constraint |
+| A salary change forces the employee's version up (`flag_modified(employee, "updated_at")`) | It relied on `updated_at = now()` differing from the stored value. On Postgres, with the same timestamp (as under the tests' frozen clock), SQLAlchemy saw no change and the version stayed put; SQLite hid this by returning naive datetimes |
+| The compose project is named `acme` | A git worktree uses the same Postgres container instead of starting a second one on port 5432 |

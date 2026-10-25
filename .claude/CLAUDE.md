@@ -33,7 +33,7 @@ Read before building: [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md), [docs/ARC
 ## Tests — every feature is covered
 - **Every feature and every bug fix ships with tests in the same change.** Nothing is "done" without them.
 - Cover the happy path **and** edge cases: validation errors, not-found, empty results, boundaries (page size limits, zero/negative amounts, dates), and permission/rate-limit responses where relevant.
-- Backend: pytest — unit tests for services, API tests with TestClient against an isolated temp SQLite DB. Deterministic (fixed seeds, no real network, no wall-clock dependence).
+- Backend: pytest — unit tests for services, API tests with TestClient against an isolated Postgres database per test (cloned from a migrated template). Deterministic (fixed seeds, no real network, no wall-clock dependence).
 - Frontend: Vitest + Testing Library for components and hooks.
 - Reuse fixtures/factories for test data instead of copying setup between tests.
 
@@ -45,7 +45,7 @@ After every change, actually run it before saying it works:
 4. Report results honestly: if something fails, show the output and fix it; never claim a pass you did not see.
 
 ## Stack (fixed — don't swap without asking)
-Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic, PostgreSQL (SQLite for tests), uv, ruff, pytest · React + Vite + TypeScript, shadcn/ui (Tailwind + Radix), TanStack Table/Query, Recharts, Vitest · Docker / docker compose.
+Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic, PostgreSQL (everywhere: dev, tests, CI, production), uv, ruff, pytest · React + Vite + TypeScript, shadcn/ui (Tailwind + Radix), TanStack Table/Query, Recharts, Vitest · Docker / docker compose.
 
 ## Docs
 - Record any new product or technical decision in `docs/DECISIONS.md` with its reason.

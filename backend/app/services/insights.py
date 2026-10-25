@@ -1,5 +1,5 @@
 """Pay insights. Counts and sums are simple; medians and percentiles are computed in Python
-over sorted values (portable between SQLite and Postgres, and fast at 10,000 rows).
+over sorted values (simple, and fast at 10,000 rows).
 
 Comparisons use full-time-equivalent pay (salary / FTE); costs use actual pay.
 Across countries amounts are in USD; within one country, in that country's currency.

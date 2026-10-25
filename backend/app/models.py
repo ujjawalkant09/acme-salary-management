@@ -218,7 +218,6 @@ class ImportJob(Base):
             "uq_import_jobs_one_open",
             text("(1)"),
             unique=True,
-            sqlite_where=text(_in("status", OPEN_IMPORT_STATUSES)),
             postgresql_where=text(_in("status", OPEN_IMPORT_STATUSES)),
         ),
     )

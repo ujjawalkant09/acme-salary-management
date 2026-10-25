@@ -23,7 +23,7 @@ from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.clock import as_utc, now
+from app.core.clock import now
 from app.core.errors import Conflict, InvalidInput
 from app.models import IdempotencyKey, User
 
@@ -63,7 +63,7 @@ async def run(
     # Read now: a rollback below expires `user`, and an async session can't reload it.
     user_id = user.id
     existing = await db.get(IdempotencyKey, (key, user_id))
-    if existing is not None and as_utc(existing.expires_at) > now():
+    if existing is not None and existing.expires_at > now():
         return _replay(existing, endpoint, body_hash)
     if existing is not None:
         await db.delete(existing)

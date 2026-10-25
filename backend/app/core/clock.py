@@ -9,8 +9,3 @@ def now() -> datetime:
 
 def today() -> date:
     return now().date()
-
-
-def as_utc(value: datetime) -> datetime:
-    """SQLite returns naive datetimes; treat them as the UTC they were stored in."""
-    return value if value.tzinfo else value.replace(tzinfo=UTC)

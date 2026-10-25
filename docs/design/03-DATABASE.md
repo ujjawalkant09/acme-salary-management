@@ -1,6 +1,6 @@
 # 03 · Database design
 
-Engine: **PostgreSQL** everywhere (Docker locally and on the EC2 server); SQLite only for fast unit tests. One schema via SQLAlchemy + Alembic; no engine-specific SQL in the app code.
+Engine: **PostgreSQL** everywhere (Docker locally, in the tests and CI, and on the EC2 server). One schema via SQLAlchemy + Alembic; no engine-specific SQL in the app code.
 
 ## 1. Entity relationship diagram
 ```mermaid
@@ -143,7 +143,7 @@ Raw uploaded files are **not** kept after parsing (less PII lying around).
 | `salary_records(employee_id, effective_date DESC)` | Profile history, "latest effective" lookup |
 | `import_rows(job_id, action)` | Preview counts, error report |
 
-Each is verified with `EXPLAIN` (SQLite: `EXPLAIN QUERY PLAN`) in a test or doc. Not added: an index per column "just in case", since every index slows writes and the import.
+Each is verified with `EXPLAIN` in a test or doc. Not added: an index per column "just in case", since every index slows writes and the import.
 
 **Search at 10k rows:** `ILIKE '%term%'` over names, email and code is a sequential scan, but 10k rows scan in a few ms. If we grow 10–100×: Postgres `pg_trgm` GIN index, behind the same API.
 

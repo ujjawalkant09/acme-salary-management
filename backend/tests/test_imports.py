@@ -8,7 +8,6 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
-from app.core.clock import as_utc
 from app.models import Employee, ImportJob, SalaryRecord
 from app.services import import_file
 from app.services import imports as service
@@ -540,7 +539,7 @@ async def test_claiming_and_checking_keep_the_heartbeat_fresh(
     job_id = start(admin_client, csv_file(row())).json()["id"]
     await run_worker(session_factory, storage)
     db.expire_all()
-    assert as_utc((await db.get(ImportJob, job_id)).heartbeat_at) == frozen_clock.current
+    assert (await db.get(ImportJob, job_id)).heartbeat_at == frozen_clock.current
 
 
 def test_viewers_cannot_import_but_can_see_history(viewer_client, admin_client):
@@ -558,8 +557,8 @@ def test_unknown_import_is_404(admin_client):
 
 
 def test_job_claim_locks_only_the_job_row_on_postgres():
-    """Tests run on SQLite, which ignores FOR UPDATE; Postgres rejects it on the outer join
-    that loads the job's creator, so the lock must name the job table only."""
+    """Postgres rejects FOR UPDATE on the outer join that loads the job's creator, so the
+    lock must name the job table only."""
     sql = str(service.next_job_query().compile(dialect=postgresql.dialect()))
     assert "LEFT OUTER JOIN users" in sql
     assert sql.endswith("FOR UPDATE OF import_jobs SKIP LOCKED")

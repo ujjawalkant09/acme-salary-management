@@ -1,17 +1,21 @@
-"""Shared fixtures: an isolated SQLite database per test (built once by the real Alembic
-migration, then copied), a frozen clock, demo users and an employee factory."""
+"""Shared fixtures: an isolated Postgres database per test (built once by the real Alembic
+migration, then cloned as a template), a frozen clock, demo users and an employee factory.
+
+Needs the local Postgres (`docker compose up -d --wait db`) or `TEST_DATABASE_URL`."""
 
 import os
-import shutil
 import tempfile
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
 _tmp = Path(tempfile.mkdtemp(prefix="acme-tests-"))
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+psycopg://acme:acme@localhost:5432/acme_test"
+)
 os.environ.update(
     SECRET_KEY="test-secret-key-0123456789",
-    DATABASE_URL=f"sqlite:///{_tmp / 'unused.db'}",
+    DATABASE_URL=TEST_DATABASE_URL,
     SESSION_COOKIE_SECURE="false",
     RATE_LIMIT_ENABLED="false",
     STORAGE_DIR=str(_tmp / "storage"),
@@ -25,11 +29,16 @@ import pytest  # noqa: E402
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import func, select  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: E402
+from sqlalchemy import create_engine, func, make_url, select, text  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import NullPool  # noqa: E402
 
 from app.core import cache, clock  # noqa: E402
-from app.core.db import get_db, make_engine  # noqa: E402
+from app.core.db import get_db  # noqa: E402
 from app.core.rate_limit import limiter  # noqa: E402
 from app.core.storage import get_storage  # noqa: E402
 from app.main import app  # noqa: E402
@@ -53,14 +62,33 @@ ADMIN_HASH = bcrypt.hashpw(b"admin-pass", bcrypt.gensalt(rounds=4)).decode()
 VIEWER_HASH = bcrypt.hashpw(b"viewer-pass", bcrypt.gensalt(rounds=4)).decode()
 
 
+def recreate_database(admin, name: str, template: str = "template0") -> None:
+    admin.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    # FILE_COPY clones a small database in a few milliseconds.
+    admin.execute(text(f'CREATE DATABASE "{name}" TEMPLATE "{template}" STRATEGY FILE_COPY'))
+
+
 @pytest.fixture(scope="session")
-def template_db() -> Path:
-    path = _tmp / "template.db"
+def admin_connection():
+    """Connected to the server's `postgres` database, to create and drop the test ones."""
+    url = make_url(TEST_DATABASE_URL).set(database="postgres")
+    engine = create_engine(url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+    with engine.connect() as connection:
+        yield connection
+    engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def template_db(admin_connection) -> str:
+    """The URL of a database migrated to head; each test gets a fresh clone of it."""
+    url = make_url(TEST_DATABASE_URL)
+    url = url.set(database=f"{url.database}_template")
+    recreate_database(admin_connection, url.database)
     config = Config(str(BACKEND / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
+    config.set_main_option("sqlalchemy.url", url.render_as_string(hide_password=False))
     command.upgrade(config, "head")
-    return path
+    return url.render_as_string(hide_password=False)
 
 
 class FrozenClock:
@@ -87,10 +115,12 @@ def frozen_clock(monkeypatch) -> FrozenClock:
 
 
 @pytest.fixture
-async def session_factory(template_db, tmp_path) -> async_sessionmaker:
-    db_path = tmp_path / "test.db"
-    shutil.copy(template_db, db_path)
-    engine = make_engine(f"sqlite:///{db_path}")
+async def session_factory(template_db, admin_connection) -> async_sessionmaker:
+    name = make_url(TEST_DATABASE_URL).database
+    recreate_database(admin_connection, name, template=make_url(template_db).database)
+    # Not pooled: the test client runs the app on an event loop of its own, and an async
+    # connection belongs to the loop that opened it.
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     factory = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     async with factory() as db:
         db.add_all(Department(name=name) for name in ("Engineering", "Sales", "Finance"))

@@ -17,6 +17,13 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: backend } }
+    # The tests make their own databases on this server (see tests/conftest.py).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: acme, POSTGRES_PASSWORD: acme, POSTGRES_DB: acme }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U acme" --health-interval 2s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -77,7 +84,7 @@ jobs:
       # Same user as the checkout, so git inside the container trusts the folder.
       - run: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 git /repo --no-banner --redact
 
-  # The unit tests use SQLite. This runs the real image against Postgres, the way the server does.
+  # The real image against Postgres, the way the server runs it.
   image-on-postgres:
     runs-on: ubuntu-latest
     services:

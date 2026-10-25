@@ -10,7 +10,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "sqlite:///./acme.db"
+    # Required. The sync form (`postgresql+psycopg://…`), which Alembic uses as is.
+    database_url: str
     # Required: the app refuses to start without it. Signs the session cookie and file links.
     secret_key: str = Field(min_length=16)
     session_cookie_secure: bool = True

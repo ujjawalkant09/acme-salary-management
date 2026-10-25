@@ -16,7 +16,7 @@ The oracles live in `e2e/` (harness: `e2e/oracle_kit.py`, one oracle per file in
 | Stop it | `.claude/skills/as-user-oracles/scripts/app.sh stop` |
 | Read-only run on the dev server (:8000) | `cd e2e && uv run python oracle_kit.py all` |
 
-The throwaway app has its own database, files, secret and random demo passwords (in `$TMPDIR/acme-oracles-8100/`), and no rate limit. It never touches `backend/acme.db` or `backend/.env`, so it works in a worktree too. `app.sh run` allows the scenarios that change data (`ORACLE_ALLOW_WRITES=1`). **Never set that flag against the dev server or the AWS demo.**
+The throwaway app has its own database, files, secret and random demo passwords (in `$TMPDIR/acme-oracles-8100/`), and no rate limit. It never touches the `acme` database or `backend/.env`, so it works in a worktree too. `app.sh run` allows the scenarios that change data (`ORACLE_ALLOW_WRITES=1`). **Never set that flag against the dev server or the AWS demo.**
 
 Rules for credentials: never `cat`, `grep` or print `backend/.env`. The runner reads the passwords itself. Never print the throwaway app's `oracle.env` either.
 
