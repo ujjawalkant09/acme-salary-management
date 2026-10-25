@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { LocationProbe } from '@tests/support/LocationProbe'
-import { ADMIN, META, mockApi } from '@tests/support/utils'
+import { ADMIN, META, mockApi, VIEWER } from '@tests/support/utils'
 
 import App from '@/App'
 
@@ -56,6 +56,20 @@ describe('App', () => {
     mockApi(HOME_ROUTES)
     show('/no-such-page')
     expect(await screen.findByRole('heading', { name: /^Good (morning|afternoon|evening), Priya$/ })).toBeInTheDocument()
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/)
+  })
+
+  it('opens the Users page for HR Admins', async () => {
+    mockApi({ ...HOME_ROUTES, 'GET /users': [] })
+    show('/users')
+    expect(await screen.findByText('Everyone who can sign in to ACME Pay.')).toBeInTheDocument()
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/users$/)
+  })
+
+  it('sends HR Viewers who open /users to Home', async () => {
+    mockApi({ ...HOME_ROUTES, 'GET /auth/me': VIEWER })
+    show('/users')
+    expect(await screen.findByRole('heading', { name: /^Good (morning|afternoon|evening), Arjun$/ })).toBeInTheDocument()
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/)
   })
 

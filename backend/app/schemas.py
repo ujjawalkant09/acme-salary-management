@@ -35,6 +35,7 @@ EmploymentType = Literal["full_time", "part_time", "contractor"]
 Status = Literal["active", "left"]
 SalaryReason = Literal["hire", "promotion", "merit", "market_adjustment", "correction", "other"]
 ImportMode = Literal["all_or_nothing", "valid_rows_only"]
+Password = Annotated[str, StringConstraints(min_length=8, max_length=200)]
 
 
 class ORM(BaseModel):
@@ -386,3 +387,32 @@ class ImportRowOut(ORM):
 
 class ImportCommitIn(BaseModel):
     mode: ImportMode = "all_or_nothing"
+
+
+class UserCreate(BaseModel):
+    name: Name
+    email: EmailStr
+    role: Role
+    password: Password
+
+
+class UserRoleIn(BaseModel):
+    role: Role
+
+
+class UserActiveIn(BaseModel):
+    active: bool
+
+
+class PasswordIn(BaseModel):
+    password: Password
+
+
+class UserAdminOut(ORM):
+    id: int
+    email: str
+    name: str
+    role: Role
+    active: bool
+    last_login_at: datetime | None
+    created_at: datetime | None

@@ -74,6 +74,10 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16))
     active: Mapped[bool] = mapped_column(default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    # Copied into the session at sign-in; bumping it signs the user out everywhere.
+    session_version: Mapped[int] = mapped_column(Integer, default=0)
 
     @property
     def is_admin(self) -> bool:

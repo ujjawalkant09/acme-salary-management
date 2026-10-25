@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 import uuid
@@ -540,6 +541,37 @@ async def test_claiming_and_checking_keep_the_heartbeat_fresh(
     await run_worker(session_factory, storage)
     db.expire_all()
     assert (await db.get(ImportJob, job_id)).heartbeat_at == frozen_clock.current
+
+
+async def test_applying_keeps_the_heartbeat_fresh_while_its_transaction_is_open(
+    admin_client, make_employee, session_factory, storage, frozen_clock, monkeypatch
+):
+    data = csv_file(
+        row(employee_code="ACM-000001", email="a@acme.example"),
+        row(employee_code="ACM-100002", email="b@acme.example"),
+        row(employee_code="ACM-100003", email="c@acme.example"),
+    )
+    job_id = start(admin_client, data).json()["id"]
+    await run_worker(session_factory, storage)
+    await make_employee()  # row 2 is skipped as a problem before the other rows are applied
+    admin_client.post(f"{API}/{job_id}/commit", json={"mode": "valid_rows_only"})
+
+    monkeypatch.setattr(service, "CHUNK", 1)
+    real_create = service._create_from_row
+    seen = []
+
+    async def create_and_look_from_outside(*args):
+        async with session_factory() as other:  # what another worker sees mid-apply
+            seen.append((await other.get(ImportJob, job_id)).heartbeat_at)
+        frozen_clock.set(frozen_clock.current + timedelta(minutes=1))
+        return await real_create(*args)
+
+    monkeypatch.setattr(service, "_create_from_row", create_and_look_from_outside)
+    start_time = frozen_clock.current
+    await asyncio.wait_for(run_worker(session_factory, storage), timeout=10)  # no deadlock
+    assert seen == [start_time, start_time + timedelta(minutes=1)]
+    job = admin_client.get(f"{API}/{job_id}").json()
+    assert (job["status"], job["created_count"], job["error_count"]) == ("completed", 2, 1)
 
 
 def test_viewers_cannot_import_but_can_see_history(viewer_client, admin_client):

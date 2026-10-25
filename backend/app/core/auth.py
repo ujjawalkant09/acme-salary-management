@@ -15,6 +15,7 @@ from app.core.errors import Forbidden, Unauthorized
 from app.models import User
 
 SESSION_USER_KEY = "user_id"
+SESSION_VERSION_KEY = "session_version"
 
 
 def hash_password(password: str) -> str:
@@ -29,7 +30,12 @@ def verify_password(password: str, password_hash: str) -> bool:
 async def get_current_user(request: Request, db: Annotated[AsyncSession, Depends(get_db)]) -> User:
     user_id = request.session.get(SESSION_USER_KEY)
     user = await db.get(User, user_id) if user_id else None
-    if user is None or not user.active:
+    # A session from before the version existed counts as version 0.
+    if (
+        user is None
+        or not user.active
+        or request.session.get(SESSION_VERSION_KEY, 0) != user.session_version
+    ):
         request.session.clear()
         raise Unauthorized("Please sign in.")
     request.state.user_id = user.id

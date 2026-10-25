@@ -10,7 +10,7 @@ from app.core.config import get_settings
 from app.core.errors import NotFound, install_error_handlers
 from app.core.logging import log_requests, setup_logging
 from app.core.rate_limit import limiter, rate_limit_exceeded
-from app.routers import auth, employees, files, imports, insights, meta
+from app.routers import auth, employees, files, imports, insights, meta, users
 
 API_PREFIX = "/api/v1"
 # Vite puts a content hash in every asset name, so a file never changes under its URL.
@@ -67,7 +67,7 @@ def create_app() -> FastAPI:
         )
 
     for router in (auth.router, meta.router, employees.router, insights.router,
-                   imports.router, files.router):  # fmt: skip
+                   imports.router, files.router, users.router):  # fmt: skip
         app.include_router(router, prefix=API_PREFIX)
 
     _serve_frontend(app, settings.frontend_dist)

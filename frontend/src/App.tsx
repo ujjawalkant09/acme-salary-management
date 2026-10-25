@@ -13,6 +13,7 @@ const EmployeePage = lazy(() => import('@/pages/EmployeePage'))
 const InsightsPage = lazy(() => import('@/pages/InsightsPage'))
 const ImportsPage = lazy(() => import('@/pages/ImportsPage'))
 const ChangesPage = lazy(() => import('@/pages/ChangesPage'))
+const UsersPage = lazy(() => import('@/pages/UsersPage'))
 
 export default function App() {
   const { data: user, isPending, isError, refetch } = useMe()
@@ -43,6 +44,7 @@ export default function App() {
             <Route path="/insights" element={<InsightsPage />} />
             <Route path="/imports" element={<ImportsPage />} />
             <Route path="/changes" element={<ChangesPage />} />
+            {user.role === 'hr_admin' && <Route path="/users" element={<UsersPage />} />}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

@@ -27,7 +27,8 @@ flowchart LR
 
 ## Data model (summary)
 ```
-users             email UNIQUE, name, password_hash, role (hr_admin | hr_viewer), active
+users             email UNIQUE, name, password_hash, role (hr_admin | hr_viewer), active,
+                  created_at, created_by, session_version
 employees         employee_code UNIQUE, names, email UNIQUE, gender (optional, never listed/exported),
                   job_title, job_level 1–6, department_id, country_code, city,
                   employment_type, fte, hire_date, status (active | left), left_on, photo_key,
