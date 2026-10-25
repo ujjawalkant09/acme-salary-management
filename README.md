@@ -11,6 +11,8 @@ Web app for an HR Manager to manage and analyze salaries for 10,000 employees ac
 ## Run it locally
 Needs Python 3.12 with [uv](https://docs.astral.sh/uv/), and Node 26 with npm. Locally the app runs on SQLite; the production image (`Dockerfile`) runs on Postgres.
 
+**One command:** `./dev.sh` installs, migrates, seeds an empty database and starts the API, the worker and the frontend together (Ctrl+C stops all three). `./dev.sh --fast` skips the setup and just starts them. The steps it runs are below.
+
 **Backend** (API on http://localhost:8000, docs at `/api/v1/docs`)
 ```bash
 cd backend

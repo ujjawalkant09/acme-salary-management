@@ -256,3 +256,28 @@ async def test_recent_changes_feed(admin_client, make_employee):
     assert len(feed) == 1
     assert (feed[0]["employee_name"], feed[0]["amount"]) == ("Mira Rao", "110000.00")
     assert admin_client.get("/api/v1/salary-changes/recent", params={"limit": 0}).status_code == 422
+
+
+async def test_salary_changes_are_paged_newest_first(viewer_client, make_employee):
+    for first in ("Asha", "Ben", "Chen"):
+        await make_employee(first_name=first, last_name="Lee")
+
+    first = viewer_client.get("/api/v1/salary-changes", params={"page_size": 2}).json()
+    assert (first["total"], first["pages"], first["page"]) == (3, 2, 1)
+    assert [c["employee_name"] for c in first["items"]] == ["Chen Lee", "Ben Lee"]
+
+    second = viewer_client.get("/api/v1/salary-changes", params={"page": 2, "page_size": 2}).json()
+    assert [c["employee_name"] for c in second["items"]] == ["Asha Lee"]
+
+    past_end = viewer_client.get(
+        "/api/v1/salary-changes", params={"page": 3, "page_size": 2}
+    ).json()
+    assert (past_end["items"], past_end["total"]) == ([], 3)
+
+
+async def test_salary_changes_empty_and_invalid_paging(admin_client, anon_client):
+    empty = admin_client.get("/api/v1/salary-changes").json()
+    assert (empty["items"], empty["total"], empty["pages"], empty["page_size"]) == ([], 0, 1, 50)
+    for params in ({"page": 0}, {"page_size": 0}, {"page_size": 101}):
+        assert admin_client.get("/api/v1/salary-changes", params=params).status_code == 422
+    assert anon_client.get("/api/v1/salary-changes").status_code == 401

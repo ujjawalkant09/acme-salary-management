@@ -193,3 +193,12 @@ Every decision, where it came from and why. Q-numbers refer to the decision book
 | Decision | Why |
 |---|---|
 | Frontend tests live in `frontend/tests/`, mirroring `src/` (e.g. `src/lib/format.ts` → `tests/lib/format.test.ts`); shared helpers are in `tests/support/` and imported as `@tests/support/...` | Keeps `src/` to app code only and matches the backend's `tests/` folder. The cost is that a test is no longer next to its file, so the mirrored paths matter |
+
+## Salary changes page (25 Oct 2026)
+| Decision | Why |
+|---|---|
+| A separate `GET /salary-changes` returns a `Page` (page, page_size, total, pages); `/salary-changes/recent` stays a plain list for Home | Paging needs a total and an offset, which the plain list doesn't have; changing its shape would have broken Home for no gain. Both use the same query and row mapping |
+| Page by `OFFSET`/`LIMIT`, ordered by `created_at desc, id desc`, 50 per page (max 100) | Matches People and Imports, and the ordered index added in migration 0004 covers the sort. The `id` tie-break keeps a row from showing on two pages. Deep pages get slower with `OFFSET`, but 35,000 rows is far from where that matters; switch to keyset paging if it does |
+| The page number lives in the URL (`?page=2`); a bad value is page 1; a page past the end shows a link back to page 1 | Refresh, Back and shared links keep the page, as on People |
+| The People page's `Pager` moved to `components/Pager.tsx` | It now has two users, People and Salary changes |
+| `dev.sh` starts the API, the worker and the frontend in one terminal (`--fast` skips install, migrate and seed) | Three terminals were needed to run the app locally; the separate commands still work and are listed in the script and the README |

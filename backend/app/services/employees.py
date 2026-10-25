@@ -182,23 +182,29 @@ async def salary_history(db: AsyncSession, employee_id: int) -> list[SalaryRecor
 
 
 async def recent_changes(db: AsyncSession, limit: int) -> list[RecentSalaryChange]:
-    changes = []
-    for record, employee in await repo.recent_salary_changes(db, limit):
-        changes.append(
-            RecentSalaryChange(
-                id=record.id,
-                employee_id=employee.id,
-                employee_name=f"{employee.first_name} {employee.last_name}",
-                employee_code=employee.employee_code,
-                amount=record.amount,
-                currency=record.currency,
-                effective_date=record.effective_date,
-                reason=record.reason,
-                created_by_name=record.creator.name if record.creator else None,
-                created_at=record.created_at,
-            )
-        )
-    return changes
+    return [_change_out(r, e) for r, e in await repo.recent_salary_changes(db, limit)]
+
+
+async def list_changes(db: AsyncSession, page: int, page_size: int) -> Page[RecentSalaryChange]:
+    """Every salary change, newest first, one page at a time."""
+    total = await repo.count_salary_changes(db)
+    rows = await repo.recent_salary_changes(db, page_size, offset=(page - 1) * page_size)
+    return Page.of([_change_out(r, e) for r, e in rows], total, page, page_size)
+
+
+def _change_out(record: SalaryRecord, employee: Employee) -> RecentSalaryChange:
+    return RecentSalaryChange(
+        id=record.id,
+        employee_id=employee.id,
+        employee_name=f"{employee.first_name} {employee.last_name}",
+        employee_code=employee.employee_code,
+        amount=record.amount,
+        currency=record.currency,
+        effective_date=record.effective_date,
+        reason=record.reason,
+        created_by_name=record.creator.name if record.creator else None,
+        created_at=record.created_at,
+    )
 
 
 # ---------- validation helpers ----------

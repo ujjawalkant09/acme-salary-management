@@ -22,6 +22,7 @@ const NAV: { to: string; label: string; icon: IconName }[] = [
   { to: '/people', label: 'People', icon: 'users' },
   { to: '/insights', label: 'Insights', icon: 'chart' },
   { to: '/imports', label: 'Imports', icon: 'upload' },
+  { to: '/changes', label: 'Salary changes', icon: 'calendar' },
 ]
 
 const TITLES: Record<string, string> = {
@@ -29,6 +30,7 @@ const TITLES: Record<string, string> = {
   '/people': 'People',
   '/insights': 'Insights',
   '/imports': 'Imports',
+  '/changes': 'Salary changes',
 }
 
 const ROLE_LABEL = { hr_admin: 'HR Admin', hr_viewer: 'HR Viewer' } as const

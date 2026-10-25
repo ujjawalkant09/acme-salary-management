@@ -181,7 +181,7 @@ async def employees_with_due_salary(db: AsyncSession, on: date) -> list[int]:
 
 
 async def recent_salary_changes(
-    db: AsyncSession, limit: int
+    db: AsyncSession, limit: int, offset: int = 0
 ) -> list[tuple[SalaryRecord, Employee]]:
     """Newest entries first, each with its employee (one query, not one per entry)."""
     rows = await db.execute(
@@ -189,9 +189,14 @@ async def recent_salary_changes(
         .join(Employee, SalaryRecord.employee_id == Employee.id)
         .options(joinedload(SalaryRecord.creator))
         .order_by(SalaryRecord.created_at.desc(), SalaryRecord.id.desc())
+        .offset(offset)
         .limit(limit)
     )
     return [(record, employee) for record, employee in rows]
+
+
+async def count_salary_changes(db: AsyncSession) -> int:
+    return await db.scalar(select(func.count()).select_from(SalaryRecord))
 
 
 async def count_upcoming_changes(db: AsyncSession, start: date, end: date) -> int:

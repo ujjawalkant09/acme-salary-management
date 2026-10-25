@@ -51,6 +51,7 @@ GET  /health · GET /meta · GET /fx-rates
 GET  /employees            ?q&country&department_id&job_title&level&status&employment_type&sort&order&page&page_size
 POST /employees · GET/PATCH /employees/{id} · POST /employees/{id}/mark-left · /reactivate
 GET/POST /employees/{id}/salaries
+GET  /salary-changes/recent?limit · GET /salary-changes?page&page_size
 PUT/DELETE /employees/{id}/photo · GET/POST /employees/{id}/documents · …/{doc_id}/download · DELETE …/{doc_id}
 GET  /employees/export.csv  same filters as the list
 GET  /insights/summary · /by-country · /by-department · /by-role · /distribution · /outliers
